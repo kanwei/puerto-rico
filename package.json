@@ -1,0 +1,16 @@
+{
+  "name": "puerto-rico-game",
+  "version": "1.0.0",
+  "description": "Puerto Rico board game implementation",
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["clojure", "board-game", "puerto-rico"],
+  "author": "",
+  "license": "MIT"
+}
