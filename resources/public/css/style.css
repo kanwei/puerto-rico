@@ -238,7 +238,156 @@ h2 {
     box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
 }
 
+/* Layout */
+.main-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+    margin-top: 20px;
+}
+
+.left-column, .right-column {
+    min-height: 500px;
+}
+
+/* Common Area */
+.common-area {
+    background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+    border: 3px solid #4a7c59;
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 20px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+.common-area h2 {
+    text-align: center;
+    margin-top: 0;
+    color: #2c5530;
+    font-size: 1.5em;
+}
+
+.supply-section {
+    margin: 20px 0;
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid #4a7c59;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.supply-section h3 {
+    margin-top: 0;
+    color: #2c5530;
+    font-size: 1.2em;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 5px;
+}
+
+.supply-section p {
+    margin: 10px 0;
+    font-size: 1.1em;
+    font-weight: bold;
+    color: #333;
+}
+
+.plantation-tiles, .goods-supply, .building-supply {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.tile-count, .good-count, .building-count {
+    background: #4a7c59;
+    color: white;
+    padding: 8px;
+    border-radius: 6px;
+    text-align: center;
+    font-weight: bold;
+}
+
+.building-count {
+    background: #8B4513;
+}
+
+.building-name {
+    display: block;
+    font-size: 0.85em;
+    text-transform: capitalize;
+    margin-bottom: 2px;
+}
+
+.building-amount {
+    display: block;
+    font-size: 1.1em;
+    font-weight: bold;
+}
+
+.tile-name, .good-name {
+    display: block;
+    font-size: 0.9em;
+    text-transform: capitalize;
+}
+
+.tile-amount, .good-amount {
+    display: block;
+    font-size: 1.1em;
+    margin-top: 2px;
+}
+
+.trading-house {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.traded-good {
+    background: #8B4513;
+    color: white;
+    padding: 6px 12px;
+    border-radius: 5px;
+    font-weight: bold;
+    text-transform: capitalize;
+}
+
+.ships {
+    margin-top: 10px;
+}
+
+.ship {
+    background: #6c757d;
+    color: white;
+    padding: 10px;
+    margin: 5px 0;
+    border-radius: 6px;
+    font-weight: bold;
+}
+
+.ship-info {
+    display: block;
+}
+
+.empty {
+    color: #999;
+    font-style: italic;
+    text-align: center;
+    padding: 10px;
+}
+
 /* Responsive design */
+@media (max-width: 1200px) {
+    .main-content {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+    
+    .plantation-tiles, .goods-supply, .building-supply {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+}
+
 @media (max-width: 768px) {
     body {
         padding: 10px;
@@ -259,5 +408,9 @@ h2 {
     
     h1 {
         font-size: 2em;
+    }
+    
+    .plantation-tiles, .goods-supply, .building-supply {
+        grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
     }
 }

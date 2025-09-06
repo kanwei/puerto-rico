@@ -3,11 +3,11 @@ goog.provide('puerto_rico.game.rules');
 
 puerto_rico.game.rules.execute_settler = (function puerto_rico$game$rules$execute_settler(game_state,player_id,plantation_choice){
 
-var player_idx = cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__38781_SHARP_){
-return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__38781_SHARP_)),player_id);
+var player_idx = cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__39874_SHARP_){
+return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__39874_SHARP_)),player_id);
 }),cljs.core.map_indexed.cljs$core$IFn$_invoke$arity$2(cljs.core.vector,new cljs.core.Keyword(null,"players","players",-1361554569).cljs$core$IFn$_invoke$arity$1(game_state)))));
-var available_plantations = cljs.core.keys(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__38782_SHARP_){
-return (cljs.core.val(p1__38782_SHARP_) > (0));
+var available_plantations = cljs.core.keys(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__39875_SHARP_){
+return (cljs.core.val(p1__39875_SHARP_) > (0));
 }),new cljs.core.Keyword(null,"plantation-supply","plantation-supply",-1569976839).cljs$core$IFn$_invoke$arity$1(game_state)));
 if(cljs.core.truth_((function (){var and__5023__auto__ = plantation_choice;
 if(cljs.core.truth_(and__5023__auto__)){
@@ -41,8 +41,8 @@ return ((x__5113__auto__ < y__5114__auto__) ? x__5113__auto__ : y__5114__auto__)
 })();
 var remaining_colonists = (total_colonists - (colonists_per_player * num_players));
 return cljs.core.update.cljs$core$IFn$_invoke$arity$4(cljs.core.update.cljs$core$IFn$_invoke$arity$3(game_state,new cljs.core.Keyword(null,"players","players",-1361554569),(function (players){
-return cljs.core.mapv.cljs$core$IFn$_invoke$arity$2((function (p1__38783_SHARP_){
-return cljs.core.update.cljs$core$IFn$_invoke$arity$3(p1__38783_SHARP_,new cljs.core.Keyword(null,"colonists","colonists",-1960965550),(function (current){
+return cljs.core.mapv.cljs$core$IFn$_invoke$arity$2((function (p1__39876_SHARP_){
+return cljs.core.update.cljs$core$IFn$_invoke$arity$3(p1__39876_SHARP_,new cljs.core.Keyword(null,"colonists","colonists",-1960965550),(function (current){
 return cljs.core.vec(cljs.core.concat.cljs$core$IFn$_invoke$arity$2(current,cljs.core.repeat.cljs$core$IFn$_invoke$arity$2(colonists_per_player,new cljs.core.Keyword(null,"colonist","colonist",2134042039))));
 }));
 }),players);
@@ -54,8 +54,8 @@ return (((new cljs.core.Keyword(null,"money","money",250333921).cljs$core$IFn$_i
 });
 puerto_rico.game.rules.execute_builder = (function puerto_rico$game$rules$execute_builder(game_state,player_id,building_choice){
 
-var player_idx = cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__38784_SHARP_){
-return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__38784_SHARP_)),player_id);
+var player_idx = cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__39877_SHARP_){
+return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__39877_SHARP_)),player_id);
 }),cljs.core.map_indexed.cljs$core$IFn$_invoke$arity$2(cljs.core.vector,new cljs.core.Keyword(null,"players","players",-1361554569).cljs$core$IFn$_invoke$arity$1(game_state)))));
 var player = cljs.core.get_in.cljs$core$IFn$_invoke$arity$2(game_state,new cljs.core.PersistentVector(null, 2, 5, cljs.core.PersistentVector.EMPTY_NODE, [new cljs.core.Keyword(null,"players","players",-1361554569),player_idx], null));
 var building_info = cljs.core.get.cljs$core$IFn$_invoke$arity$2(puerto_rico.game.state.buildings,building_choice);
@@ -88,13 +88,13 @@ return (((cljs.core.get_in.cljs$core$IFn$_invoke$arity$3(player,new cljs.core.Pe
 });
 puerto_rico.game.rules.execute_trader = (function puerto_rico$game$rules$execute_trader(game_state,player_id,good_choice){
 
-var player_idx = cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__38785_SHARP_){
-return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__38785_SHARP_)),player_id);
+var player_idx = cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__39878_SHARP_){
+return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__39878_SHARP_)),player_id);
 }),cljs.core.map_indexed.cljs$core$IFn$_invoke$arity$2(cljs.core.vector,new cljs.core.Keyword(null,"players","players",-1361554569).cljs$core$IFn$_invoke$arity$1(game_state)))));
 var player = cljs.core.get_in.cljs$core$IFn$_invoke$arity$2(game_state,new cljs.core.PersistentVector(null, 2, 5, cljs.core.PersistentVector.EMPTY_NODE, [new cljs.core.Keyword(null,"players","players",-1361554569),player_idx], null));
-var trade_value = (function (){var G__38786 = good_choice;
-var G__38786__$1 = (((G__38786 instanceof cljs.core.Keyword))?G__38786.fqn:null);
-switch (G__38786__$1) {
+var trade_value = (function (){var G__39879 = good_choice;
+var G__39879__$1 = (((G__39879 instanceof cljs.core.Keyword))?G__39879.fqn:null);
+switch (G__39879__$1) {
 case "corn":
 return (0);
 
@@ -134,27 +134,27 @@ return game_state;
 });
 puerto_rico.game.rules.find_ship_for_good = (function puerto_rico$game$rules$find_ship_for_good(ships,good,amount){
 
-return cljs.core.first(cljs.core.sort_by.cljs$core$IFn$_invoke$arity$2((function (p__38787){
-var vec__38788 = p__38787;
-var idx = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38788,(0),null);
-var ship = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38788,(1),null);
+return cljs.core.first(cljs.core.sort_by.cljs$core$IFn$_invoke$arity$2((function (p__39880){
+var vec__39881 = p__39880;
+var idx = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39881,(0),null);
+var ship = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39881,(1),null);
 return new cljs.core.Keyword(null,"capacity","capacity",72689734).cljs$core$IFn$_invoke$arity$1(ship);
-}),cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p__38791){
-var vec__38792 = p__38791;
-var idx = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38792,(0),null);
-var ship = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38792,(1),null);
+}),cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p__39884){
+var vec__39885 = p__39884;
+var idx = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39885,(0),null);
+var ship = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39885,(1),null);
 return ((new cljs.core.Keyword(null,"capacity","capacity",72689734).cljs$core$IFn$_invoke$arity$1(ship) - new cljs.core.Keyword(null,"amount","amount",364489504).cljs$core$IFn$_invoke$arity$1(ship)) >= amount);
-}),cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p__38795){
-var vec__38796 = p__38795;
-var idx = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38796,(0),null);
-var ship = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38796,(1),null);
+}),cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p__39888){
+var vec__39889 = p__39888;
+var idx = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39889,(0),null);
+var ship = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39889,(1),null);
 return (((new cljs.core.Keyword(null,"good","good",511701169).cljs$core$IFn$_invoke$arity$1(ship) == null)) || (cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"good","good",511701169).cljs$core$IFn$_invoke$arity$1(ship),good)));
 }),cljs.core.map_indexed.cljs$core$IFn$_invoke$arity$2(cljs.core.vector,ships)))));
 });
 puerto_rico.game.rules.execute_captain = (function puerto_rico$game$rules$execute_captain(game_state,player_id,good_choice){
 
-var player_idx = cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__38799_SHARP_){
-return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__38799_SHARP_)),player_id);
+var player_idx = cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__39892_SHARP_){
+return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__39892_SHARP_)),player_id);
 }),cljs.core.map_indexed.cljs$core$IFn$_invoke$arity$2(cljs.core.vector,new cljs.core.Keyword(null,"players","players",-1361554569).cljs$core$IFn$_invoke$arity$1(game_state)))));
 var player = cljs.core.get_in.cljs$core$IFn$_invoke$arity$2(game_state,new cljs.core.PersistentVector(null, 2, 5, cljs.core.PersistentVector.EMPTY_NODE, [new cljs.core.Keyword(null,"players","players",-1361554569),player_idx], null));
 var amount_to_ship = cljs.core.get_in.cljs$core$IFn$_invoke$arity$3(player,new cljs.core.PersistentVector(null, 2, 5, cljs.core.PersistentVector.EMPTY_NODE, [new cljs.core.Keyword(null,"goods","goods",702040840),good_choice], null),(0));
@@ -171,9 +171,9 @@ return and__5023__auto____$1;
 return and__5023__auto__;
 }
 })())){
-var vec__38800 = ship_choice;
-var ship_idx = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38800,(0),null);
-var ship = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38800,(1),null);
+var vec__39893 = ship_choice;
+var ship_idx = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39893,(0),null);
+var ship = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39893,(1),null);
 var actual_amount = (function (){var x__5113__auto__ = amount_to_ship;
 var y__5114__auto__ = (new cljs.core.Keyword(null,"capacity","capacity",72689734).cljs$core$IFn$_invoke$arity$1(ship) - new cljs.core.Keyword(null,"amount","amount",364489504).cljs$core$IFn$_invoke$arity$1(ship));
 return ((x__5113__auto__ < y__5114__auto__) ? x__5113__auto__ : y__5114__auto__);
@@ -186,50 +186,50 @@ return game_state;
 puerto_rico.game.rules.select_role = (function puerto_rico$game$rules$select_role(game_state,player_id,role){
 
 if(cljs.core.contains_QMARK_(new cljs.core.Keyword(null,"available-roles","available-roles",-1628893019).cljs$core$IFn$_invoke$arity$1(game_state),role)){
-var new_state = cljs.core.update.cljs$core$IFn$_invoke$arity$4(cljs.core.update.cljs$core$IFn$_invoke$arity$4(cljs.core.assoc.cljs$core$IFn$_invoke$arity$3(cljs.core.assoc.cljs$core$IFn$_invoke$arity$3(cljs.core.assoc.cljs$core$IFn$_invoke$arity$3(game_state,new cljs.core.Keyword(null,"selected-role","selected-role",8663708),role),new cljs.core.Keyword(null,"role-player-idx","role-player-idx",1417379264),cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__38803_SHARP_){
-return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__38803_SHARP_)),player_id);
+var new_state = cljs.core.update.cljs$core$IFn$_invoke$arity$4(cljs.core.update.cljs$core$IFn$_invoke$arity$4(cljs.core.assoc.cljs$core$IFn$_invoke$arity$3(cljs.core.assoc.cljs$core$IFn$_invoke$arity$3(cljs.core.assoc.cljs$core$IFn$_invoke$arity$3(game_state,new cljs.core.Keyword(null,"selected-role","selected-role",8663708),role),new cljs.core.Keyword(null,"role-player-idx","role-player-idx",1417379264),cljs.core.first(cljs.core.first(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__39896_SHARP_){
+return cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(cljs.core.second(p1__39896_SHARP_)),player_id);
 }),cljs.core.map_indexed.cljs$core$IFn$_invoke$arity$2(cljs.core.vector,new cljs.core.Keyword(null,"players","players",-1361554569).cljs$core$IFn$_invoke$arity$1(game_state)))))),new cljs.core.Keyword(null,"phase","phase",575722892),new cljs.core.Keyword(null,"role-execution","role-execution",-1842623549)),new cljs.core.Keyword(null,"available-roles","available-roles",-1628893019),cljs.core.disj,role),new cljs.core.Keyword(null,"used-roles","used-roles",1915499651),cljs.core.conj,role);
-var G__38807 = role;
-var G__38807__$1 = (((G__38807 instanceof cljs.core.Keyword))?G__38807.fqn:null);
-switch (G__38807__$1) {
+var G__39900 = role;
+var G__39900__$1 = (((G__39900 instanceof cljs.core.Keyword))?G__39900.fqn:null);
+switch (G__39900__$1) {
 case "mayor":
 case "craftsman":
 case "prospector":
-var G__38808 = (function (){var G__38809 = (puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$3 ? puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$3(new_state,role,player_id) : puerto_rico.game.rules.execute_role.call(null,new_state,role,player_id));
-return (puerto_rico.game.rules.end_role_execution.cljs$core$IFn$_invoke$arity$1 ? puerto_rico.game.rules.end_role_execution.cljs$core$IFn$_invoke$arity$1(G__38809) : puerto_rico.game.rules.end_role_execution.call(null,G__38809));
+var G__39901 = (function (){var G__39902 = (puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$3 ? puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$3(new_state,role,player_id) : puerto_rico.game.rules.execute_role.call(null,new_state,role,player_id));
+return (puerto_rico.game.rules.end_role_execution.cljs$core$IFn$_invoke$arity$1 ? puerto_rico.game.rules.end_role_execution.cljs$core$IFn$_invoke$arity$1(G__39902) : puerto_rico.game.rules.end_role_execution.call(null,G__39902));
 })();
-return (puerto_rico.game.rules.end_round.cljs$core$IFn$_invoke$arity$1 ? puerto_rico.game.rules.end_round.cljs$core$IFn$_invoke$arity$1(G__38808) : puerto_rico.game.rules.end_round.call(null,G__38808));
+return (puerto_rico.game.rules.end_round.cljs$core$IFn$_invoke$arity$1 ? puerto_rico.game.rules.end_round.cljs$core$IFn$_invoke$arity$1(G__39901) : puerto_rico.game.rules.end_round.call(null,G__39901));
 
 break;
 default:
 var current_player = puerto_rico.game.state.current_player(new_state);
-var has_valid_actions = (function (){var G__38810 = role;
-var G__38810__$1 = (((G__38810 instanceof cljs.core.Keyword))?G__38810.fqn:null);
-switch (G__38810__$1) {
+var has_valid_actions = (function (){var G__39903 = role;
+var G__39903__$1 = (((G__39903 instanceof cljs.core.Keyword))?G__39903.fqn:null);
+switch (G__39903__$1) {
 case "settler":
-return cljs.core.seq(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__38804_SHARP_){
-return (cljs.core.val(p1__38804_SHARP_) > (0));
+return cljs.core.seq(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__39897_SHARP_){
+return (cljs.core.val(p1__39897_SHARP_) > (0));
 }),new cljs.core.Keyword(null,"plantation-supply","plantation-supply",-1569976839).cljs$core$IFn$_invoke$arity$1(new_state)));
 
 break;
 case "builder":
-return cljs.core.seq(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p__38811){
-var vec__38812 = p__38811;
-var building = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38812,(0),null);
-var info = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__38812,(1),null);
+return cljs.core.seq(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p__39904){
+var vec__39905 = p__39904;
+var building = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39905,(0),null);
+var info = cljs.core.nth.cljs$core$IFn$_invoke$arity$3(vec__39905,(1),null);
 return puerto_rico.game.rules.can_build_building_QMARK_(current_player,building,info);
 }),puerto_rico.game.state.buildings));
 
 break;
 case "trader":
-return cljs.core.seq(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__38805_SHARP_){
-return puerto_rico.game.rules.can_trade_good_QMARK_(new_state,current_player,p1__38805_SHARP_);
+return cljs.core.seq(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__39898_SHARP_){
+return puerto_rico.game.rules.can_trade_good_QMARK_(new_state,current_player,p1__39898_SHARP_);
 }),puerto_rico.game.state.goods));
 
 break;
 case "captain":
-return cljs.core.seq(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__38806_SHARP_){
-return (cljs.core.get_in.cljs$core$IFn$_invoke$arity$3(current_player,new cljs.core.PersistentVector(null, 2, 5, cljs.core.PersistentVector.EMPTY_NODE, [new cljs.core.Keyword(null,"goods","goods",702040840),p1__38806_SHARP_], null),(0)) > (0));
+return cljs.core.seq(cljs.core.filter.cljs$core$IFn$_invoke$arity$2((function (p1__39899_SHARP_){
+return (cljs.core.get_in.cljs$core$IFn$_invoke$arity$3(current_player,new cljs.core.PersistentVector(null, 2, 5, cljs.core.PersistentVector.EMPTY_NODE, [new cljs.core.Keyword(null,"goods","goods",702040840),p1__39899_SHARP_], null),(0)) > (0));
 }),puerto_rico.game.state.goods));
 
 break;
@@ -241,10 +241,10 @@ return true;
 if(cljs.core.truth_(has_valid_actions)){
 return new_state;
 } else {
-var G__38815 = (function (){var G__38816 = (puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$3 ? puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$3(new_state,role,player_id) : puerto_rico.game.rules.execute_role.call(null,new_state,role,player_id));
-return (puerto_rico.game.rules.end_role_execution.cljs$core$IFn$_invoke$arity$1 ? puerto_rico.game.rules.end_role_execution.cljs$core$IFn$_invoke$arity$1(G__38816) : puerto_rico.game.rules.end_role_execution.call(null,G__38816));
+var G__39908 = (function (){var G__39909 = (puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$3 ? puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$3(new_state,role,player_id) : puerto_rico.game.rules.execute_role.call(null,new_state,role,player_id));
+return (puerto_rico.game.rules.end_role_execution.cljs$core$IFn$_invoke$arity$1 ? puerto_rico.game.rules.end_role_execution.cljs$core$IFn$_invoke$arity$1(G__39909) : puerto_rico.game.rules.end_role_execution.call(null,G__39909));
 })();
-return (puerto_rico.game.rules.end_round.cljs$core$IFn$_invoke$arity$1 ? puerto_rico.game.rules.end_round.cljs$core$IFn$_invoke$arity$1(G__38815) : puerto_rico.game.rules.end_round.call(null,G__38815));
+return (puerto_rico.game.rules.end_round.cljs$core$IFn$_invoke$arity$1 ? puerto_rico.game.rules.end_round.cljs$core$IFn$_invoke$arity$1(G__39908) : puerto_rico.game.rules.end_round.call(null,G__39908));
 }
 
 }
@@ -254,14 +254,14 @@ return game_state;
 });
 puerto_rico.game.rules.execute_role = (function puerto_rico$game$rules$execute_role(var_args){
 var args__5755__auto__ = [];
-var len__5749__auto___38842 = arguments.length;
-var i__5750__auto___38843 = (0);
+var len__5749__auto___39925 = arguments.length;
+var i__5750__auto___39926 = (0);
 while(true){
-if((i__5750__auto___38843 < len__5749__auto___38842)){
-args__5755__auto__.push((arguments[i__5750__auto___38843]));
+if((i__5750__auto___39926 < len__5749__auto___39925)){
+args__5755__auto__.push((arguments[i__5750__auto___39926]));
 
-var G__38844 = (i__5750__auto___38843 + (1));
-i__5750__auto___38843 = G__38844;
+var G__39927 = (i__5750__auto___39926 + (1));
+i__5750__auto___39926 = G__39927;
 continue;
 } else {
 }
@@ -274,9 +274,9 @@ return puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$variadic(
 
 (puerto_rico.game.rules.execute_role.cljs$core$IFn$_invoke$arity$variadic = (function (game_state,role,player_id,args){
 
-var G__38821 = role;
-var G__38821__$1 = (((G__38821 instanceof cljs.core.Keyword))?G__38821.fqn:null);
-switch (G__38821__$1) {
+var G__39914 = role;
+var G__39914__$1 = (((G__39914 instanceof cljs.core.Keyword))?G__39914.fqn:null);
+switch (G__39914__$1) {
 case "settler":
 return puerto_rico.game.rules.execute_settler(game_state,player_id,cljs.core.first(args));
 
@@ -314,15 +314,15 @@ return game_state;
 (puerto_rico.game.rules.execute_role.cljs$lang$maxFixedArity = (3));
 
 /** @this {Function} */
-(puerto_rico.game.rules.execute_role.cljs$lang$applyTo = (function (seq38817){
-var G__38818 = cljs.core.first(seq38817);
-var seq38817__$1 = cljs.core.next(seq38817);
-var G__38819 = cljs.core.first(seq38817__$1);
-var seq38817__$2 = cljs.core.next(seq38817__$1);
-var G__38820 = cljs.core.first(seq38817__$2);
-var seq38817__$3 = cljs.core.next(seq38817__$2);
+(puerto_rico.game.rules.execute_role.cljs$lang$applyTo = (function (seq39910){
+var G__39911 = cljs.core.first(seq39910);
+var seq39910__$1 = cljs.core.next(seq39910);
+var G__39912 = cljs.core.first(seq39910__$1);
+var seq39910__$2 = cljs.core.next(seq39910__$1);
+var G__39913 = cljs.core.first(seq39910__$2);
+var seq39910__$3 = cljs.core.next(seq39910__$2);
 var self__5734__auto__ = this;
-return self__5734__auto__.cljs$core$IFn$_invoke$arity$variadic(G__38818,G__38819,G__38820,seq38817__$3);
+return self__5734__auto__.cljs$core$IFn$_invoke$arity$variadic(G__39911,G__39912,G__39913,seq39910__$3);
 }));
 
 puerto_rico.game.rules.end_role_execution = (function puerto_rico$game$rules$end_role_execution(game_state){
@@ -348,9 +348,9 @@ return puerto_rico.game.state.advance_to_next_player(game_state);
 });
 puerto_rico.game.rules.valid_move_QMARK_ = (function puerto_rico$game$rules$valid_move_QMARK_(game_state,player_id,move){
 
-var G__38822 = new cljs.core.Keyword(null,"type","type",1174270348).cljs$core$IFn$_invoke$arity$1(move);
-var G__38822__$1 = (((G__38822 instanceof cljs.core.Keyword))?G__38822.fqn:null);
-switch (G__38822__$1) {
+var G__39915 = new cljs.core.Keyword(null,"type","type",1174270348).cljs$core$IFn$_invoke$arity$1(move);
+var G__39915__$1 = (((G__39915 instanceof cljs.core.Keyword))?G__39915.fqn:null);
+switch (G__39915__$1) {
 case "select-role":
 return ((cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"phase","phase",575722892).cljs$core$IFn$_invoke$arity$1(game_state),new cljs.core.Keyword(null,"role-selection","role-selection",991461347))) && (((cljs.core._EQ_.cljs$core$IFn$_invoke$arity$2(new cljs.core.Keyword(null,"id","id",-1388402092).cljs$core$IFn$_invoke$arity$1(puerto_rico.game.state.current_player(game_state)),player_id)) && (cljs.core.contains_QMARK_(new cljs.core.Keyword(null,"available-roles","available-roles",-1628893019).cljs$core$IFn$_invoke$arity$1(game_state),new cljs.core.Keyword(null,"role","role",-736691072).cljs$core$IFn$_invoke$arity$1(move))))));
 
@@ -366,9 +366,9 @@ return false;
 });
 puerto_rico.game.rules.apply_move = (function puerto_rico$game$rules$apply_move(game_state,move){
 
-var G__38823 = new cljs.core.Keyword(null,"type","type",1174270348).cljs$core$IFn$_invoke$arity$1(move);
-var G__38823__$1 = (((G__38823 instanceof cljs.core.Keyword))?G__38823.fqn:null);
-switch (G__38823__$1) {
+var G__39916 = new cljs.core.Keyword(null,"type","type",1174270348).cljs$core$IFn$_invoke$arity$1(move);
+var G__39916__$1 = (((G__39916 instanceof cljs.core.Keyword))?G__39916.fqn:null);
+switch (G__39916__$1) {
 case "select-role":
 return puerto_rico.game.rules.select_role(game_state,new cljs.core.Keyword(null,"player-id","player-id",1003896428).cljs$core$IFn$_invoke$arity$1(move),new cljs.core.Keyword(null,"role","role",-736691072).cljs$core$IFn$_invoke$arity$1(move));
 

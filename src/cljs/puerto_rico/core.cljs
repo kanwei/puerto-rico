@@ -71,6 +71,68 @@
          ^{:key plantation} [:span.plantation (str (name plantation) " ")])
        [:span.empty "None"])]]])
 
+(defn common-area [game-data]
+  [:div.common-area
+   [:h2 "🏢 Common Area"]
+
+   ;; Victory Points Supply
+   [:div.supply-section
+    [:h3 "🏆 Victory Points Supply"]
+    [:p "Remaining: " (:victory-point-supply game-data)]]
+
+   ;; Colonist Supply
+   [:div.supply-section
+    [:h3 "👥 Colonist Supply"]
+    [:p "Remaining: " (:colonist-supply game-data)]]
+
+   ;; Plantation Tiles
+   [:div.supply-section
+    [:h3 "🌱 Plantation Tiles"]
+    [:div.plantation-tiles
+     (for [[tile-type count] (:plantation-supply game-data)]
+       ^{:key tile-type} [:div.tile-count
+                          [:span.tile-name (name tile-type)]
+                          [:span.tile-amount ": " count]])]]
+
+   ;; Goods Supply
+   [:div.supply-section
+    [:h3 "📦 Goods Supply"]
+    [:div.goods-supply
+     (for [[good count] (:goods-supply game-data)]
+       ^{:key good} [:div.good-count
+                     [:span.good-name (name good)]
+                     [:span.good-amount ": " count]])]]
+
+   ;; Building Supply
+   [:div.supply-section
+    [:h3 "🏗️ Building Supply"]
+    [:div.building-supply
+     (for [[building count] (sort-by first (:building-supply game-data))]
+       ^{:key building} [:div.building-count
+                         [:span.building-name (name building)]
+                         [:span.building-amount ": " count]])]]
+
+   ;; Trading House
+   [:div.supply-section
+    [:h3 "🏪 Trading House"]
+    (if (seq (:trading-house game-data))
+      [:div.trading-house
+       (for [good (:trading-house game-data)]
+         ^{:key good} [:span.traded-good (name good) " "])]
+      [:p.empty "Empty"])]
+
+   ;; Ships
+   [:div.supply-section
+    [:h3 "🚢 Ships"]
+    [:div.ships
+     (for [[idx ship] (map-indexed vector (:ships game-data))]
+       ^{:key idx} [:div.ship
+                    [:span.ship-info
+                     "Ship " (inc idx) ": "
+                     (if (:good ship)
+                       (str (name (:good ship)) " " (:amount ship) "/" (:capacity ship))
+                       (str "Empty (Capacity: " (:capacity ship) ")"))]])]]])
+
 (defn game-board []
   (let [game-data (:game-state @game-state)]
     (if game-data
@@ -82,18 +144,23 @@
           [:p "⚡ Phase: " (name (:phase game-data))]
           [:p "👤 Current Player: " (:name current-player-data)]]
 
-         [:div.roles-section
-          [:h2 "🎭 Available Roles"]
-          [:div.roles-grid
-           (for [role (:available-roles game-data)]
-             ^{:key role} [role-card role true handle-role-selection])]]
+         [:div.main-content
+          [:div.left-column
+           [:div.roles-section
+            [:h2 "🎭 Available Roles"]
+            [:div.roles-grid
+             (for [role (:available-roles game-data)]
+               ^{:key role} [role-card role true handle-role-selection])]]
 
-         [:div.players-section
-          [:h2 "👥 Players"]
-          [:div.players-grid
-           (for [[idx player] (map-indexed vector (:players game-data))]
-             ^{:key (:id player)}
-             [player-board player (= idx (:current-player-idx game-data))])]]])
+           [common-area game-data]]
+
+          [:div.right-column
+           [:div.players-section
+            [:h2 "👥 Players"]
+            [:div.players-grid
+             (for [[idx player] (map-indexed vector (:players game-data))]
+               ^{:key (:id player)}
+               [player-board player (= idx (:current-player-idx game-data))])]]]]])
       [:div.no-game
        [:h1 "🏝️ Puerto Rico"]
        [:p "Welcome to the Puerto Rico board game!"]
