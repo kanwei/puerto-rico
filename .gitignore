@@ -32,3 +32,6 @@
 /classes
 /target
 /node_modules
+resources/public/js/cljs-runtime
+resources/public/js/main.js
+.DS_Store
