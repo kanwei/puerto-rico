@@ -283,6 +283,11 @@
        (not (contains? (set (map :good (:trading-house game-state))) good))
        (< (count (:trading-house game-state)) 4)))
 
+(defn has-occupied-building? [player building-type]
+  "Check if player has an occupied building of the given type"
+  (some #(and (= (:type %) building-type) (pos? (:colonists % 0)))
+        (:buildings player)))
+
 (defn execute-trader [game-state player-id good-choice]
   "Execute the trader role - sell goods to trading house"
   (let [player-idx (->> (:players game-state)
@@ -291,17 +296,23 @@
                         first
                         first)
         player (get-in game-state [:players player-idx])
-        trade-value (case good-choice
-                      :corn 0
-                      :indigo 1
-                      :sugar 2
-                      :tobacco 3
-                      :coffee 4
-                      0)]
+        base-trade-value (case good-choice
+                           :corn 0
+                           :indigo 1
+                           :sugar 2
+                           :tobacco 3
+                           :coffee 4
+                           0)
+        ;; Check for market building bonuses
+        market-bonus (cond
+                       (has-occupied-building? player :large-market) 2
+                       (has-occupied-building? player :small-market) 1
+                       :else 0)
+        total-value (+ base-trade-value market-bonus)]
     (if (and good-choice (can-trade-good? game-state player good-choice))
       (-> game-state
           (update-in [:players player-idx :goods good-choice] dec)
-          (update-in [:players player-idx :money] + trade-value)
+          (update-in [:players player-idx :money] + total-value)
           (update :trading-house conj {:good good-choice :player-id player-id}))
       game-state)))
 
