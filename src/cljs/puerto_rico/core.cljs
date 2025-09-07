@@ -293,6 +293,52 @@
         [:h3 "Skip"]
         [:p "Don't take any tile"]]]]]))
 
+(defn building-card
+  "Renders a building card with cost in first circle, worker slots, and VP in corner"
+  [building-key building-info on-click available-count]
+  (let [cost (:cost building-info)
+        vp (:vp building-info)
+        worker-slots (:worker building-info)
+        building-name (-> building-key name (clojure.string/replace "-" " "))
+        description (or (:description building-info) "")
+        ;; Extract key benefit from description for display
+        benefit (cond
+                  (clojure.string/includes? description "colonist")
+                  "+ 1 colonist for settling (settler phase)"
+                  (clojure.string/includes? description "doubloon")
+                  (let [amount (if (clojure.string/includes? description "extra 2") "2" "1")]
+                    (str "+ " amount " doubloon for trading"))
+                  (clojure.string/includes? description "victory point")
+                  "+ extra victory points"
+                  (and (seq description) (> (count description) 0))
+                  (-> description
+                      (clojure.string/split #"\.")
+                      first
+                      (subs 0 (min 50 (count description))))
+                  :else
+                  "Special building ability")]
+    [:div.building-card {:on-click on-click}
+     ;; VP in top right corner
+     [:div.building-vp vp]
+
+     ;; Building name
+     [:div.building-name building-name]
+
+     ;; Worker slots - all empty circles
+     [:div.worker-slots
+      (for [i (range worker-slots)]
+        ^{:key i}
+        [:div.worker-circle])]
+
+     ;; Key benefit
+     [:div.building-benefit benefit]
+
+     ;; Available count
+     [:div.building-available (str "Available: " available-count)]
+
+     ;; Cost in bottom right
+     [:div.building-cost (str "$" cost)]]))
+
 (defn building-choice-ui [game-data]
   (let [current-player-data (current-role-executor game-data)
 ;; Get building types the player already owns
@@ -308,20 +354,13 @@
      (if (seq affordable-buildings)
        [:div
         [:p "Select a building to construct or skip (You have $" (:money current-player-data) "):"]
-        [:div.choice-grid
+        [:div.building-grid
          ;; Building options
          (for [[building-key building-info] affordable-buildings]
            ^{:key building-key}
-           [:div.choice-card.building-card {:on-click #(handle-building-choice building-key)}
-            [:h3 (name building-key)]
-            [:div.building-stats
-             [:p "Cost: $" (:cost building-info)]
-             [:p "VP: " (:vp building-info)]
-             [:p "Workers: " (:worker building-info)]
-             [:p "Available: " (get (:building-supply game-data) building-key 0)]]
-            (when (:description building-info)
-              [:div.building-description
-               [:p.description-text (:description building-info)]])])
+           [building-card building-key building-info
+            #(handle-building-choice building-key)
+            (get (:building-supply game-data) building-key 0)])
          ;; Skip option
          ^{:key "skip"}
          [:div.choice-card.skip {:on-click #(handle-skip-role :builder)}

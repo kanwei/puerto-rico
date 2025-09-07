@@ -362,6 +362,106 @@ body {
     color: #6c757d;
 }
 
+/* Building card styles */
+.building-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-top: 10px;
+}
+
+.building-card {
+    background: linear-gradient(135deg, #8B6F99, #9B7FA9);
+    color: white;
+    border-radius: 8px;
+    padding: 15px;
+    position: relative;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    min-height: 120px;
+    border: 2px solid #6B4C7A;
+}
+
+.building-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 15px rgba(0,0,0,0.3);
+    border-color: #9B7FA9;
+}
+
+.building-vp {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    background: #DC143C;
+    color: white;
+    font-weight: bold;
+    font-size: 1.4em;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+.building-name {
+    font-size: 1.2em;
+    font-weight: bold;
+    margin-bottom: 15px;
+    text-transform: capitalize;
+    color: white;
+}
+
+.worker-slots {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    align-items: center;
+}
+
+.worker-circle {
+    width: 35px;
+    height: 35px;
+    border-radius: 50%;
+    border: 3px solid white;
+    background: rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: white;
+    font-size: 0.9em;
+}
+
+.building-benefit {
+    font-size: 0.85em;
+    margin-bottom: 8px;
+    opacity: 0.95;
+    line-height: 1.3;
+    font-style: italic;
+    padding: 4px 0;
+}
+
+.building-available {
+    font-size: 0.8em;
+    opacity: 0.8;
+    position: absolute;
+    bottom: 8px;
+    left: 12px;
+}
+
+.building-cost {
+    position: absolute;
+    bottom: 8px;
+    right: 12px;
+    font-size: 1.1em;
+    font-weight: bold;
+    color: #FFD700;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+}
+
 /* No game state */
 .no-game {
     text-align: center;
