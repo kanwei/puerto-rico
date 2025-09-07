@@ -86,9 +86,13 @@
    :name name
    :money 2
    :goods {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
-   :plantations []
-   :buildings []
-   :colonists []
+   ;; Each plantation/building tracks its colonists
+   :plantations [] ;; [{:type :corn :colonists 0} {:type :indigo :colonists 1}]
+   :buildings [] ;; [{:type :small-indigo-maker :colonists 0}]
+   ;; Track colonists in hand (from mayor role)
+   :colonists-in-hand 0
+   ;; San Juan storage for colonists that can't be placed
+   :san-juan-colonists 0
    :victory-points 0
    :is-ai false})
 
@@ -113,6 +117,8 @@
    :plantation-supply plantation-tiles
    :goods-supply {:corn 10 :indigo 11 :sugar 11 :tobacco 9 :coffee 9}
    :colonist-supply 95
+   ;; Colonist ship for Mayor role (starts with number of players)
+   :colonist-ship (count players)
    :building-supply (create-building-supply buildings)
    :victory-point-supply 122
    :ships [{:capacity 4 :good nil :amount 0}

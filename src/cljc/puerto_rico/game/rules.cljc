@@ -21,30 +21,126 @@
              (>= player-idx 0)
              (< player-idx (count (:players game-state))))
       (-> game-state
-          (update-in [:players player-idx :plantations] conj plantation-choice)
+          ;; Add plantation as a map with colonist tracking
+          (update-in [:players player-idx :plantations] conj {:type plantation-choice :colonists 0})
           (update-in [:plantation-supply plantation-choice] dec))
       game-state)))
 
+(defn get-tile-capacity [tile]
+  "Get the maximum number of colonists a tile can hold"
+  (if (contains? tile :type)
+    ;; For buildings, look up capacity from building info
+    (if-let [building-info (get state/buildings (:type tile))]
+      (get building-info :worker 1) ;; Default to 1 if no worker count specified
+      1) ;; Default capacity
+    1)) ;; Plantations have 1 circle
+
+(defn get-empty-spaces [tile]
+  "Get number of empty spaces on a tile"
+  (- (get-tile-capacity tile) (:colonists tile 0)))
+
+(defn auto-place-colonists [player]
+  "Automatically place colonists for a player on tiles with empty circles"
+  (let [colonists-to-place (+ (:colonists-in-hand player) (:san-juan-colonists player))
+        ;; Get all tiles (plantations and buildings) with their empty spaces
+        plantations-with-spaces (map-indexed
+                                 (fn [idx plantation]
+                                   {:idx idx :type :plantation :tile plantation :empty-spaces (get-empty-spaces plantation)})
+                                 (:plantations player))
+        buildings-with-spaces (map-indexed
+                               (fn [idx building]
+                                 {:idx idx :type :building :tile building :empty-spaces (get-empty-spaces building)})
+                               (:buildings player))
+
+        ;; Combine all tiles with empty spaces
+        all-empty-spaces (filter #(> (:empty-spaces %) 0)
+                                 (concat plantations-with-spaces buildings-with-spaces))
+
+        ;; Sort by empty spaces (prioritize tiles with more spaces)
+        sorted-spaces (sort-by :empty-spaces > all-empty-spaces)
+
+        ;; Place colonists on tiles
+        [updated-player remaining-colonists]
+        (reduce (fn [[player remaining] space-info]
+                  (if (<= remaining 0)
+                    [player remaining]
+                    (let [spaces-to-fill (min remaining (:empty-spaces space-info))
+                          tile-path (if (= (:type space-info) :plantation)
+                                      [:plantations (:idx space-info)]
+                                      [:buildings (:idx space-info)])]
+                      [(update-in player (conj tile-path :colonists) + spaces-to-fill)
+                       (- remaining spaces-to-fill)])))
+                [player colonists-to-place]
+                sorted-spaces)]
+
+    (-> updated-player
+        (assoc :colonists-in-hand 0)
+        (assoc :san-juan-colonists remaining-colonists))))
+
 (defn execute-mayor [game-state]
-  "Execute the mayor role - distribute colonists"
-  (let [total-colonists (:colonist-supply game-state)
+  "Execute the mayor role - distribute colonists according to Puerto Rico rules"
+  (let [role-selector-idx (:role-selector-idx game-state)
         num-players (count (:players game-state))
-        colonists-per-player (min 1 (quot total-colonists num-players))
-        remaining-colonists (- total-colonists (* colonists-per-player num-players))]
-    (-> game-state
-        (update :players
-                (fn [players]
-                  (mapv #(update % :colonists
-                                 (fn [current]
-                                   (vec (concat current
-                                                (repeat colonists-per-player :colonist)))))
-                        players)))
-        (update :colonist-supply - (* colonists-per-player num-players)))))
+
+        ;; Step 1: Role selector gets privilege (1 colonist from supply, not ship)
+        game-after-privilege (if (and role-selector-idx (> (:colonist-supply game-state) 0))
+                               (-> game-state
+                                   (update-in [:players role-selector-idx :colonists-in-hand] inc)
+                                   (update :colonist-supply dec))
+                               game-state)
+
+        ;; Step 2: Calculate ship distribution
+        ;; Players take from colonist ship one at a time, starting with mayor
+        colonists-on-ship (:colonist-ship game-after-privilege)
+
+        ;; Distribute colonists from ship (one at a time, clockwise from mayor)
+        game-after-ship (if (> colonists-on-ship 0)
+                          (loop [game game-after-privilege
+                                 remaining-colonists colonists-on-ship
+                                 current-player-idx (:governor-idx game-after-privilege)]
+                            (if (<= remaining-colonists 0)
+                              (assoc game :colonist-ship 0)
+                              (let [next-player-idx (mod (inc current-player-idx) num-players)]
+                                (recur
+                                 (update-in game [:players current-player-idx :colonists-in-hand] inc)
+                                 (dec remaining-colonists)
+                                 next-player-idx))))
+                          game-after-privilege)
+
+        ;; Step 3: Auto-place colonists for all players (simplified)
+        game-after-placement (update game-after-ship :players
+                                     (fn [players]
+                                       (mapv auto-place-colonists players)))
+
+        ;; Step 4: Refill colonist ship
+        ;; Count empty building circles across all players (simplified for now)
+        total-empty-building-circles (reduce +
+                                             (map (fn [player]
+                                                   ;; Simple calculation: each building has ~1 empty circle on average
+                                                   ;; This should be improved with proper circle counting
+                                                    (max 0 (- 3 (count (:buildings player)))))
+                                                  (:players game-after-placement)))
+
+        ;; Mayor should place at least as many colonists as there are players
+        colonists-to-add (max num-players total-empty-building-circles)
+        colonists-available (min colonists-to-add (:colonist-supply game-after-placement))
+
+        final-game (-> game-after-placement
+                       (update :colonist-ship + colonists-available)
+                       (update :colonist-supply - colonists-available))]
+
+    (println "Mayor executed:")
+    (println "  Privilege colonist given to role selector")
+    (println "  Colonists distributed from ship:" colonists-on-ship)
+    (println "  Colonists auto-placed on tiles")
+    (println "  New colonists added to ship:" colonists-available)
+    final-game))
 
 (defn can-build-building? [player building-key building-info]
   "Check if player can afford to build a building"
   (and (>= (:money player) (:cost building-info))
-       (not (contains? (set (:buildings player)) building-key))
+       ;; Check if player already has this building type
+       (not (some #(= (:type %) building-key) (:buildings player)))
        (< (count (:buildings player)) 12)))
 
 (defn execute-builder [game-state player-id building-choice]
@@ -60,7 +156,8 @@
              building-info
              (can-build-building? player building-choice building-info))
       (-> game-state
-          (update-in [:players player-idx :buildings] conj building-choice)
+          ;; Add building as a map with colonist tracking
+          (update-in [:players player-idx :buildings] conj {:type building-choice :colonists 0})
           (update-in [:players player-idx :money] - (:cost building-info)))
       game-state)))
 

@@ -322,6 +322,9 @@
    [:div.player-stats
     [:p "💰 Money: $" (:money player)]
     [:p "🏆 Victory Points: " (:victory-points player)]
+    [:p "🏘️ San Juan Colonists: " (get player :san-juan-colonists 0)]
+    (when (> (get player :colonists-in-hand 0) 0)
+      [:p "👥 Colonists in Hand: " (get player :colonists-in-hand 0)])
     [:div.goods
      [:h4 "📦 Goods:"]
      (if (seq (:goods player))
@@ -331,14 +334,22 @@
     [:div.buildings
      [:h4 "🏢 Buildings:"]
      (if (seq (:buildings player))
-       (for [building (:buildings player)]
-         ^{:key building} [:span.building (str (name building) " ")])
+       (for [[idx building] (map-indexed vector (:buildings player))]
+         ^{:key idx} [:span.building
+                      (str (if (map? building)
+                             (name (:type building))
+                             (name building))
+                           " [" (if (map? building) (:colonists building 0) 0) "👥] ")])
        [:span.empty "None"])]
     [:div.plantations
      [:h4 "🌱 Plantations:"]
      (if (seq (:plantations player))
-       (for [plantation (:plantations player)]
-         ^{:key plantation} [:span.plantation (str (name plantation) " ")])
+       (for [[idx plantation] (map-indexed vector (:plantations player))]
+         ^{:key idx} [:span.plantation
+                      (str (if (map? plantation)
+                             (name (:type plantation))
+                             (name plantation))
+                           " [" (if (map? plantation) (:colonists plantation 0) 0) "👥] ")])
        [:span.empty "None"])]]])
 
 (defn common-area [game-data]
@@ -350,10 +361,15 @@
     [:h3 "🏆 Victory Points Supply"]
     [:p "Remaining: " (:victory-point-supply game-data)]]
 
-   ;; Colonist Supply
+;; Colonist Supply
    [:div.supply-section
     [:h3 "👥 Colonist Supply"]
     [:p "Remaining: " (:colonist-supply game-data)]]
+
+   ;; Colonist Ship (for Mayor role)
+   [:div.supply-section
+    [:h3 "🚢 Colonist Ship"]
+    [:p "On Ship: " (get game-data :colonist-ship 0) " colonists"]]
 
    ;; Plantation Tiles
    [:div.supply-section
