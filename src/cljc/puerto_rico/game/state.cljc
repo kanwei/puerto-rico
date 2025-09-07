@@ -177,9 +177,20 @@
                              4 100
                              5 122
                              122) ; default to full supply
-     :ships [{:capacity 4 :good nil :amount 0}
-             {:capacity 5 :good nil :amount 0}
-             {:capacity 6 :good nil :amount 0}]
+     :ships (case num-players
+              3 [{:capacity 4 :good nil :amount 0}
+                 {:capacity 5 :good nil :amount 0}
+                 {:capacity 6 :good nil :amount 0}]
+              4 [{:capacity 5 :good nil :amount 0}
+                 {:capacity 6 :good nil :amount 0}
+                 {:capacity 7 :good nil :amount 0}]
+              5 [{:capacity 6 :good nil :amount 0}
+                 {:capacity 7 :good nil :amount 0}
+                 {:capacity 8 :good nil :amount 0}]
+                        ;; Default to 4-player setup
+              [{:capacity 5 :good nil :amount 0}
+               {:capacity 6 :good nil :amount 0}
+               {:capacity 7 :good nil :amount 0}])
      :trading-house []
      :game-over false
      :winner nil}))
