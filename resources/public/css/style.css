@@ -238,6 +238,149 @@ h2 {
     box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
 }
 
+/* AI Turn UI */
+.ai-turn {
+    background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+    border: 3px solid #1976d2;
+    border-radius: 12px;
+    padding: 20px;
+    margin: 20px 0;
+    text-align: center;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+.ai-turn h2 {
+    color: #1976d2;
+    margin-top: 0;
+    font-size: 1.5em;
+}
+
+.ai-turn p {
+    color: #1976d2;
+    font-size: 1.1em;
+    margin: 15px 0;
+}
+
+.ai-turn button {
+    background: linear-gradient(135deg, #1976d2, #1565c0);
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    font-size: 1.1em;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    font-weight: bold;
+}
+
+.ai-turn button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    background: linear-gradient(135deg, #1565c0, #0d47a1);
+}
+
+.ai-indicator {
+    background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+    color: #1976d2;
+    padding: 15px;
+    border-radius: 8px;
+    font-weight: bold;
+    text-align: center;
+    margin: 15px 0;
+    border: 2px solid #1976d2;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.ai-indicator p {
+    margin: 0 0 10px 0;
+    font-size: 1.1em;
+}
+
+.ai-button {
+    background: linear-gradient(135deg, #1976d2, #1565c0);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    font-size: 1em;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    font-weight: bold;
+}
+
+.ai-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    background: linear-gradient(135deg, #1565c0, #0d47a1);
+}
+
+/* Role Execution UI */
+.role-execution {
+    background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+    border: 3px solid #856404;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+.role-execution h2 {
+    text-align: center;
+    color: #856404;
+    margin-top: 0;
+    font-size: 1.6em;
+}
+
+.role-execution p {
+    text-align: center;
+    font-size: 1.1em;
+    margin: 15px 0;
+    color: #856404;
+    font-weight: bold;
+}
+
+.choice-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 15px;
+    margin-top: 20px;
+}
+
+.choice-card {
+    background: linear-gradient(135deg, #fff, #f8f9fa);
+    border: 2px solid #856404;
+    border-radius: 10px;
+    padding: 15px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.choice-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    border-color: #FFD700;
+    background: linear-gradient(135deg, #fffef7, #fefdf0);
+}
+
+.choice-card h3 {
+    margin: 0 0 10px 0;
+    color: #856404;
+    font-size: 1.2em;
+    text-transform: capitalize;
+}
+
+.choice-card p {
+    margin: 5px 0;
+    color: #6c757d;
+    font-size: 0.9em;
+    font-weight: normal;
+    text-align: center;
+}
+
 /* Layout */
 .main-content {
     display: grid;

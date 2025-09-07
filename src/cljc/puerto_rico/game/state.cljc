@@ -71,6 +71,14 @@
           {}
           buildings))
 
+(defn create-role-execution-order
+  "Create the order in which players execute a role, starting with the role selector"
+  [game-state role-selector-idx]
+  (let [player-count (count (:players game-state))]
+    (take player-count
+          (map #(mod % player-count)
+               (range role-selector-idx (+ role-selector-idx player-count))))))
+
 ;; Player state structure
 (defn new-player
   [id name]
@@ -92,7 +100,9 @@
    :round 1
    :phase :role-selection
    :selected-role nil
-   :role-player-idx nil
+   :role-selector-idx nil
+   :role-execution-order nil
+   :role-execution-current-idx nil
    :available-roles (set roles)
    :used-roles #{}
    :plantation-supply plantation-tiles

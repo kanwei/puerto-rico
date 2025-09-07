@@ -132,44 +132,41 @@
 
 ;; Role selection and execution
 (defn select-role [game-state player-id role]
-  "Player selects a role to execute"
+  "Player selects a role - all players will then execute this role in turn order"
   (if (contains? (:available-roles game-state) role)
-    (let [new-state (-> game-state
-                        (assoc :selected-role role)
-                        (assoc :role-player-idx (->> (:players game-state)
-                                                     (map-indexed vector)
-                                                     (filter #(= (:id (second %)) player-id))
-                                                     first
-                                                     first))
-                        (assoc :phase :role-execution)
-                        (update :available-roles disj role)
-                        (update :used-roles conj role))]
-      ;; For roles that require no choices, execute immediately
-      (case role
-        (:mayor :craftsman :prospector)
-        (-> (execute-role new-state role player-id)
-            (end-role-execution)
-            (end-round))
-
-        ;; For other roles, check if there are valid actions
-        (let [current-player (state/current-player new-state)
-              has-valid-actions (case role
-                                  :settler (seq (filter #(pos? (val %)) (:plantation-supply new-state)))
-                                  :builder (seq (filter (fn [[building info]]
-                                                          (can-build-building? current-player building info))
-                                                        state/buildings))
-                                  :trader (seq (filter #(can-trade-good? new-state current-player %)
-                                                       state/goods))
-                                  :captain (seq (filter #(pos? (get-in current-player [:goods %] 0))
-                                                        state/goods))
-                                  true)]
-          (if has-valid-actions
-            new-state
-            ;; No valid actions, execute role with no effect and continue
-            (-> (execute-role new-state role player-id)
-                (end-role-execution)
-                (end-round))))))
+    (let [selector-idx (->> (:players game-state)
+                            (map-indexed vector)
+                            (filter #(= (:id (second %)) player-id))
+                            first
+                            first)
+          execution-order (state/create-role-execution-order game-state selector-idx)]
+      (-> game-state
+          (assoc :selected-role role)
+          (assoc :role-selector-idx selector-idx)
+          (assoc :role-execution-order execution-order)
+          (assoc :role-execution-current-idx (first execution-order))
+          (assoc :phase :role-execution)
+          (update :available-roles disj role)
+          (update :used-roles conj role)))
     game-state))
+
+(defn advance-role-execution [game-state]
+  "Move to the next player in role execution order, or end role if all players have executed"
+  (let [execution-order (:role-execution-order game-state)
+        current-idx (:role-execution-current-idx game-state)
+        current-position (.indexOf execution-order current-idx)
+        next-position (inc current-position)]
+    (if (>= next-position (count execution-order))
+      ;; All players have executed the role, move to next role selection
+      (-> game-state
+          (assoc :phase :role-selection)
+          (assoc :selected-role nil)
+          (assoc :role-selector-idx nil)
+          (assoc :role-execution-order nil)
+          (assoc :role-execution-current-idx nil)
+          (assoc :current-player-idx (state/next-player-idx game-state)))
+      ;; Move to next player in execution order
+      (assoc game-state :role-execution-current-idx (nth execution-order next-position)))))
 
 (defn execute-role [game-state role player-id & args]
   "Execute the selected role with given arguments"
