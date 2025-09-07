@@ -99,16 +99,26 @@
   (let [current-game (:game-state @game-state)]
     (when current-game
       (let [executor-player (current-role-executor current-game)
-            player-id (:id executor-player)]
+            player-id (:id executor-player)
+            executor-idx (:role-execution-current-idx current-game)
+            ;; Capture money before trade (for trader role)
+            money-before (when (= role :trader) (:money executor-player))]
         (when (and executor-player player-id)
           (let [new-game-state (-> current-game
                                    (rules/execute-role role player-id good-type)
                                    (rules/advance-role-execution))
+                ;; Calculate money gained for trader role (use executor index before advancement)
+                executor-after (when (and (= role :trader) executor-idx)
+                                 (nth (:players new-game-state) executor-idx))
+                money-after (when executor-after (:money executor-after))
+                money-gained (when (and money-before money-after) (- money-after money-before))
                 action-text (case role
-                              :trader "💰 Sold"
-                              :captain "🚢 Shipped"
-                              "Used")]
-            (add-log-entry (str action-text " " (name good-type)) (:name executor-player))
+                              :trader (str "💰 Sold " (name good-type)
+                                           (when money-gained
+                                             (str " for " money-gained " doubloons")))
+                              :captain (str "🚢 Shipped " (name good-type))
+                              (str "Used " (name good-type)))]
+            (add-log-entry action-text (:name executor-player))
             (swap! game-state assoc :game-state new-game-state)
             (js/console.log "Good chosen:" good-type "for role:" role "for player:" (:name executor-player) "New game state:" new-game-state)))))))
 
@@ -491,13 +501,7 @@
            [:span.status-item "📅 Round " (:round game-data)]
            [:span.status-item "⚡ " (name (:phase game-data))]
            [:span.status-item "👑 " (:name (state/current-governor game-data))]
-           [:span.status-item "👤 " (:name current-player-data)]]
-          (let [ai-player (if (= (:phase game-data) :role-execution)
-                            (current-role-executor game-data)
-                            (when (:is-ai current-player-data) current-player-data))]
-            (when ai-player
-              [:button.ai-button-compact {:on-click #(handle-ai-turn game-data)}
-               "🤖 " (:name ai-player)]))]
+           [:span.status-item "👤 " (:name current-player-data)]]]
 
          ;; Players in horizontal row (compact)
          [:div.players-row
@@ -508,21 +512,33 @@
          ;; Main action area and common area side by side
          [:div.main-area
           [:div.action-area
-           (let [executor (current-role-executor game-data)]
+           (let [executor (current-role-executor game-data)
+                 ;; Determine if we need to show AI button
+                 ai-player (cond
+                             ;; Role execution phase - check if executor is AI
+                             (= (:phase game-data) :role-execution)
+                             (when (:is-ai executor) executor)
+                             ;; Role selection phase - check if current player is AI
+                             (= (:phase game-data) :role-selection)
+                             (when (:is-ai current-player-data) current-player-data)
+                             ;; Default
+                             :else nil)]
              (cond
-               ;; Role execution phase - AI turn
-               (and (= (:phase game-data) :role-execution) (:is-ai executor))
-               [:div.ai-turn-compact
-                [:h3 "🤖 " (:name executor) " executing " (name (:selected-role game-data))]]
+               ;; Show AI button when it's an AI player's turn
+               ai-player
+               [:div.ai-turn-section
+                [:h3 "🤖 AI Player Turn"]
+                [:p (:name ai-player) " is "
+                 (case (:phase game-data)
+                   :role-selection "selecting a role"
+                   :role-execution (str "executing " (name (:selected-role game-data)))
+                   "taking their turn") "..."]
+                [:button.ai-turn-button {:on-click #(handle-ai-turn game-data)}
+                 "▶️ Execute " (:name ai-player) "'s Turn"]]
 
                ;; Role execution phase - human turn
                (= (:phase game-data) :role-execution)
                [role-execution-ui game-data]
-
-               ;; Role selection phase - AI turn
-               (and (= (:phase game-data) :role-selection) (:is-ai current-player-data))
-               [:div.ai-turn-compact
-                [:h3 "🤖 " (:name current-player-data) " selecting role..."]]
 
                ;; Role selection phase - human turn
                :else
