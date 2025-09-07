@@ -5,10 +5,22 @@
             [puerto-rico.game.rules :as rules]))
 
 ;; Simple game state atom for demo
-(defonce game-state (reagent/atom {:game-state nil
-                                   :game-id nil
-                                   :loading false
-                                   :error nil}))
+(defonce game-state (reagent/atom {:game-state nil}))
+
+(defonce game-log (reagent/atom []))
+
+;; State for tracking AI action display  
+(defonce ai-action-display (reagent/atom {:show false :player "" :action ""}))
+
+(defonce game-log (reagent/atom []))
+
+;; State for tracking AI action display
+(defonce ai-action-display (reagent/atom {:show false :player "" :action ""}))
+
+(defonce game-log (reagent/atom []))
+
+;; State for tracking AI action display
+(defonce ai-action-display (reagent/atom {:show false :player "" :action ""}))
 
 ;; Game log state
 (defonce game-log (reagent/atom []))
@@ -230,10 +242,111 @@
         (js/console.log "Auto-executed global role" selected-role "for entire table")))))
 
 ;; Game state watcher for AI turns
+(defn execute-ai-turn-async [game-data]
+  "Execute AI turn with visual feedback"
+  (let [ai-player (if (= (:phase game-data) :role-execution)
+                    (current-role-executor game-data)
+                    (when (:is-ai (current-player game-data)) (current-player game-data)))]
+    (when ai-player
+      (case (:phase game-data)
+        :role-selection
+        (let [available-roles (:available-roles game-data)
+              role (rand-nth (vec available-roles))]
+          (reset! ai-action-display {:show true :player (:name ai-player) :action (str "Selected " (name role) " role")})
+          (js/setTimeout #(do
+                            (reset! ai-action-display {:show false :player "" :action ""})
+                            (handle-role-selection role)) 250))
+
+        :role-execution
+        (let [selected-role (:selected-role game-data)]
+          (case selected-role
+            :settler
+            (let [face-up-plantations (:face-up-plantations game-data)
+                  quarry-supply (:quarry-supply game-data)
+                  executor-player (current-role-executor game-data)
+                  role-selector-idx (:role-selector-idx game-data)
+                  current-player-idx (:role-execution-current-idx game-data)
+                  is-role-selector (= current-player-idx role-selector-idx)
+                  has-construction-hut (some #(and (= (:type %) :construction-hut)
+                                                   (:colonists %)
+                                                   (pos? (:colonists %)))
+                                             (:buildings executor-player))
+                  can-take-quarry (and (pos? quarry-supply) (or is-role-selector has-construction-hut))
+                  available-choices (concat face-up-plantations
+                                            (when can-take-quarry [:quarry]))]
+              (when (seq available-choices)
+                (let [choice (rand-nth available-choices)]
+                  (reset! ai-action-display {:show true :player (:name executor-player) :action (str "Took " (name choice))})
+                  (js/setTimeout #(do
+                                    (reset! ai-action-display {:show false :player "" :action ""})
+                                    (handle-plantation-choice choice)) 250))))
+
+            :builder
+            (let [executor-player (current-role-executor game-data)
+                  affordable-buildings (filter (fn [[building-key building-info]]
+                                                 (and (>= (:money executor-player) (:cost building-info))
+                                                      (pos? (get (:building-supply game-data) building-key 0))))
+                                               state/buildings)]
+              (if (seq affordable-buildings)
+                (let [[building-key _] (rand-nth affordable-buildings)
+                      building-name (-> building-key name (clojure.string/replace "-" " "))]
+                  (reset! ai-action-display {:show true :player (:name executor-player) :action (str "Built " building-name)})
+                  (js/setTimeout #(do
+                                    (reset! ai-action-display {:show false :player "" :action ""})
+                                    (handle-building-choice building-key)) 250))
+                (do
+                  (reset! ai-action-display {:show true :player (:name executor-player) :action "Skipped building (no money)"})
+                  (js/setTimeout #(do
+                                    (reset! ai-action-display {:show false :player "" :action ""})
+                                    (handle-skip-role :builder)) 250))))
+
+            (:trader :captain)
+            (let [executor-player (current-role-executor game-data)
+                  available-goods (filter #(pos? (get-in executor-player [:goods %] 0))
+                                          [:corn :indigo :sugar :tobacco :coffee])]
+              (if (seq available-goods)
+                (let [good (rand-nth available-goods)]
+                  (reset! ai-action-display {:show true :player (:name executor-player)
+                                             :action (str (case selected-role
+                                                            :trader "Sold"
+                                                            :captain "Shipped") " " (name good))})
+                  (js/setTimeout #(do
+                                    (reset! ai-action-display {:show false :player "" :action ""})
+                                    (handle-good-choice good selected-role)) 250))
+                (do
+                  (reset! ai-action-display {:show true :player (:name executor-player) :action (str "Skipped " (name selected-role) " (no goods)")})
+                  (js/setTimeout #(do
+                                    (reset! ai-action-display {:show false :player "" :action ""})
+                                    (handle-skip-role selected-role)) 250))))
+
+            (:mayor :craftsman)
+            (let [executor-player (current-role-executor game-data)]
+              (reset! ai-action-display {:show true :player (:name executor-player) :action (str "Executed " (name selected-role))})
+              (js/setTimeout #(do
+                                (reset! ai-action-display {:show false :player "" :action ""})
+                                (swap! game-state update :game-state
+                                       (fn [gd]
+                                         (when gd
+                                           (-> (rules/execute-role gd selected-role (:id executor-player))
+                                               (rules/end-role-execution)))))) 250))
+
+            nil))))))
+
 (defn game-state-watcher []
   (let [game-data (:game-state @game-state)]
     (when game-data
-      (handle-ai-turn game-data))
+      (let [current-player-data (current-player game-data)
+            executor (current-role-executor game-data)]
+        (cond
+          ;; Role selection phase - auto-execute if AI
+          (and (= (:phase game-data) :role-selection) (:is-ai current-player-data))
+          (when (not (:show @ai-action-display))
+            (execute-ai-turn-async game-data))
+
+          ;; Role execution phase - auto-execute if AI executor  
+          (and (= (:phase game-data) :role-execution) (:is-ai executor))
+          (when (not (:show @ai-action-display))
+            (execute-ai-turn-async game-data)))))
     game-data))
 
 ;; Components
@@ -530,7 +643,7 @@
       [:div.log-empty "No events yet..."])]])
 
 (defn game-board []
-  (let [game-data (:game-state @game-state)]
+  (let [game-data (game-state-watcher)]
     (if game-data
       (let [current-player-data (current-player game-data)]
         [:div.game-board-compact
@@ -564,17 +677,16 @@
                              ;; Default
                              :else nil)]
              (cond
-               ;; Show AI button when it's an AI player's turn
+;; Auto-execute AI turns with visual feedback
                ai-player
-               [:div.ai-turn-section
-                [:h3 "🤖 AI Player Turn"]
-                [:p (:name ai-player) " is "
-                 (case (:phase game-data)
-                   :role-selection "selecting a role"
-                   :role-execution (str "executing " (name (:selected-role game-data)))
-                   "taking their turn") "..."]
-                [:button.ai-turn-button {:on-click #(handle-ai-turn game-data)}
-                 "▶️ Execute " (:name ai-player) "'s Turn"]]
+               (let [ai-display @ai-action-display]
+                 (if (:show ai-display)
+                   [:div.ai-action-display
+                    [:h3 "🤖 " (:player ai-display)]
+                    [:p (:action ai-display)]]
+                   [:div.waiting
+                    [:h3 "⏳ AI Processing"]
+                    [:p (:name ai-player) " is making a decision..."]]))
 
                ;; Role execution phase - human turn
                (= (:phase game-data) :role-execution)
