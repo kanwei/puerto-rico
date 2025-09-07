@@ -452,9 +452,16 @@
     (if (and good-choice (pos? amount-to-ship) ship-choice)
       (let [[ship-idx ship] ship-choice
             actual-amount (min amount-to-ship (- (:capacity ship) (:amount ship)))
-            ;; Award VPs using helper function that respects supply
-            [updated-game vps-awarded] (award-victory-points game-state player-idx actual-amount)]
-        (-> updated-game
+            ;; Award base VPs using helper function that respects supply
+            [game-after-base-vps vps-awarded] (award-victory-points game-state player-idx actual-amount)
+            ;; Check for harbor bonus: +1 VP per loading action (not per barrel)
+            has-harbor (has-occupied-building? player :harbor)
+            harbor-bonus (if has-harbor 1 0)
+            ;; Award harbor bonus VP if applicable
+            [final-game harbor-vps-awarded] (if has-harbor
+                                              (award-victory-points game-after-base-vps player-idx harbor-bonus)
+                                              [game-after-base-vps 0])]
+        (-> final-game
             (update-in [:players player-idx :goods good-choice] - actual-amount)
             (assoc-in [:ships ship-idx :good] good-choice)
             (update-in [:ships ship-idx :amount] + actual-amount)))
