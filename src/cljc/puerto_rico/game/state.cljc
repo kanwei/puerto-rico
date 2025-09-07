@@ -291,6 +291,51 @@
                      vp-exhausted "victory points exhausted")))
     (or has-12-buildings colonists-exhausted vp-exhausted)))
 
+(defn calculate-victory-points-breakdown [player]
+  "Calculate victory points with detailed breakdown for game over screen"
+  (let [building-vps (reduce + (map #(get-in buildings [% :vp] 0) (:buildings player)))
+        goods-vps (quot (reduce + (vals (:goods player))) 1)
+        shipping-vps (:victory-points player)
+
+        ;; Large building bonuses breakdown
+        guild-hall-bonus (if (has-occupied-building? player :guild-hall)
+                           (let [{:keys [small large]} (count-production-buildings player)]
+                             (+ (* small 1) (* large 2)))
+                           0)
+        residence-bonus (if (has-occupied-building? player :residence)
+                          (let [filled-spaces (count-filled-island-spaces player)]
+                            (cond
+                              (>= filled-spaces 12) 7
+                              (>= filled-spaces 11) 6
+                              (>= filled-spaces 10) 5
+                              (>= filled-spaces 9) 4
+                              :else 0))
+                          0)
+        fortress-bonus (if (has-occupied-building? player :fortress)
+                         (quot (count-total-colonists player) 3)
+                         0)
+        customs-house-bonus (if (has-occupied-building? player :customs-house)
+                              (quot (:victory-points player) 4)
+                              0)
+        city-hall-bonus (if (has-occupied-building? player :city-hall)
+                          (count-violet-buildings player)
+                          0)
+
+        large-building-bonuses (+ guild-hall-bonus residence-bonus fortress-bonus
+                                  customs-house-bonus city-hall-bonus)
+        total-vps (+ shipping-vps building-vps goods-vps large-building-bonuses)]
+
+    {:shipping-vps shipping-vps
+     :building-vps building-vps
+     :goods-vps goods-vps
+     :large-building-bonuses large-building-bonuses
+     :guild-hall-bonus guild-hall-bonus
+     :residence-bonus residence-bonus
+     :fortress-bonus fortress-bonus
+     :customs-house-bonus customs-house-bonus
+     :city-hall-bonus city-hall-bonus
+     :total-vps total-vps}))
+
 ;; Calculate final victory points
 (defn calculate-victory-points [player]
   (let [building-vps (reduce + (map #(get-in buildings [% :vp] 0) (:buildings player)))
