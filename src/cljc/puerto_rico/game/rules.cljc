@@ -367,6 +367,8 @@
                         first
                         first)
         player (get-in game-state [:players player-idx])
+        role-selector-idx (:role-selector-idx game-state)
+        is-role-selector? (= player-idx role-selector-idx)
         base-trade-value (case good-choice
                            :corn 0
                            :indigo 1
@@ -379,7 +381,9 @@
                        (has-occupied-building? player :large-market) 2
                        (has-occupied-building? player :small-market) 1
                        :else 0)
-        total-value (+ base-trade-value market-bonus)]
+        ;; Role selector gets +1 privilege bonus
+        privilege-bonus (if is-role-selector? 1 0)
+        total-value (+ base-trade-value market-bonus privilege-bonus)]
     (if (and good-choice (can-trade-good? game-state player good-choice))
       (-> game-state
           (update-in [:players player-idx :goods good-choice] dec)
