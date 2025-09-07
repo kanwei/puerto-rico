@@ -72,10 +72,12 @@
 
 ;; AI turn handling
 (defn handle-ai-turn [game-data]
-  (let [current-player-data (current-role-executor game-data)]
-    (when (:is-ai current-player-data)
-      (let [player-id (:id current-player-data)
-            difficulty (:difficulty current-player-data :medium)]
+  (let [ai-player (if (= (:phase game-data) :role-execution)
+                    (current-role-executor game-data)
+                    (when (:is-ai (current-player game-data)) (current-player game-data)))]
+    (when ai-player
+      (let [player-id (:id ai-player)
+            difficulty (:difficulty ai-player :medium)]
         ;; Use setTimeout to make AI decisions feel more natural
         (js/setTimeout
          (fn []
@@ -118,6 +120,21 @@
                      ;; For other roles, do nothing (they execute automatically)
                      nil))))))
          500)))))
+
+(defn handle-automatic-role-execution [game-data]
+  "Handle roles that don't require player choices (Mayor, Craftsman)"
+  (let [selected-role (:selected-role game-data)
+        executor-player (current-role-executor game-data)]
+    (when (and executor-player
+               (contains? #{:mayor :craftsman} selected-role))
+      ;; Auto-execute for this player and advance
+      (let [current-game (:game-state @game-state)
+            player-id (:id executor-player)
+            new-game-state (-> current-game
+                               (rules/execute-role selected-role player-id)
+                               (rules/advance-role-execution))]
+        (swap! game-state assoc :game-state new-game-state)
+        (js/console.log "Auto-executed role" selected-role "for player" (:name executor-player))))))
 
 ;; Game state watcher for AI turns
 (defn game-state-watcher []
@@ -191,12 +208,23 @@
          [:p "You have: " (get-in current-player-data [:goods good-type] 0)]])]]))
 
 (defn role-execution-ui [game-data]
-  (let [selected-role (:selected-role game-data)]
+  (let [selected-role (:selected-role game-data)
+        executor-player (current-role-executor game-data)]
+    ;; Auto-execute roles that don't require choices
+    (when (contains? #{:mayor :craftsman} selected-role)
+      (js/setTimeout #(handle-automatic-role-execution game-data) 100))
+
     (case selected-role
       :settler [plantation-choice-ui game-data]
       :builder [building-choice-ui game-data]
       :trader [good-choice-ui game-data :trader]
       :captain [good-choice-ui game-data :captain]
+      ;; For automatic roles, show status
+      (:mayor :craftsman)
+      [:div.role-execution
+       [:h2 "🔄 " (name selected-role) " - Executing Automatically"]
+       [:p (:name executor-player) " is executing " (name selected-role) "..."]]
+      ;; Default case
       [:div.role-execution
        [:h2 "Role Execution"]
        [:p "Role " (name selected-role) " is being executed..."]])))
@@ -298,12 +326,16 @@
           [:p "📅 Round: " (:round game-data)]
           [:p "⚡ Phase: " (name (:phase game-data))]
           [:p "👤 Current Player: " (:name current-player-data)]
-          (when-let [executor (current-role-executor game-data)]
-            (when (:is-ai executor)
+          (let [ai-player (if (= (:phase game-data) :role-execution)
+                            (current-role-executor game-data)
+                            (when (:is-ai current-player-data) current-player-data))]
+            (when ai-player
               [:div.ai-indicator
-               [:p "🤖 AI Player - " (:name executor) " is thinking..."]
+               [:p "🤖 AI Player - " (:name ai-player) " is thinking..."]
                [:button.ai-button {:on-click #(handle-ai-turn game-data)}
-                "Let AI Make Move"]]))]
+                (if (= (:phase game-data) :role-selection)
+                  "Let AI Select Role"
+                  "Let AI Make Move")]]))]
 
          [:div.main-content
           [:div.left-column

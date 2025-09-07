@@ -138,16 +138,24 @@
                             (map-indexed vector)
                             (filter #(= (:id (second %)) player-id))
                             first
-                            first)
-          execution-order (state/create-role-execution-order game-state selector-idx)]
-      (-> game-state
-          (assoc :selected-role role)
-          (assoc :role-selector-idx selector-idx)
-          (assoc :role-execution-order execution-order)
-          (assoc :role-execution-current-idx (first execution-order))
-          (assoc :phase :role-execution)
-          (update :available-roles disj role)
-          (update :used-roles conj role)))
+                            first)]
+      (if (= role :prospector)
+        ;; Prospector is privilege-only: only selector gets benefit, then next role selection
+        (-> game-state
+            (update-in [:players selector-idx :money] inc)
+            (update :available-roles disj role)
+            (update :used-roles conj role)
+            (assoc :current-player-idx (state/next-player-idx game-state)))
+        ;; All other roles: all players execute in turn order
+        (let [execution-order (state/create-role-execution-order game-state selector-idx)]
+          (-> game-state
+              (assoc :selected-role role)
+              (assoc :role-selector-idx selector-idx)
+              (assoc :role-execution-order execution-order)
+              (assoc :role-execution-current-idx (first execution-order))
+              (assoc :phase :role-execution)
+              (update :available-roles disj role)
+              (update :used-roles conj role)))))
     game-state))
 
 (defn advance-role-execution [game-state]
@@ -177,7 +185,8 @@
     :craftsman (execute-craftsman game-state)
     :trader (execute-trader game-state player-id (first args))
     :captain (execute-captain game-state player-id (first args))
-    :prospector (update-in game-state [:players (:role-player-idx game-state) :money] inc)
+    :prospector (let [executor-idx (:role-execution-current-idx game-state)]
+                  (update-in game-state [:players executor-idx :money] inc))
     game-state))
 
 ;; Game phase management
