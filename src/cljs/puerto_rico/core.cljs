@@ -406,21 +406,22 @@
     (for [[good count] (sort-by first (:goods-supply game-data))]
       ^{:key good} [:span.supply-chip (str (name good) ":" count)])]
 
-   ;; Trading house (if not empty)
+;; Trading house (if not empty)
    (when (seq (:trading-house game-data))
      [:div.supply-section
       [:strong "🏪 Trading House: "]
-      (for [good (:trading-house game-data)]
-        ^{:key good} [:span.supply-chip (name good)])])
+      (for [item (:trading-house game-data)]
+        (let [good-name (if (map? item) (:good item) item)]
+          ^{:key (str "th-" good-name)} [:span.supply-chip (name good-name)]))])
 
-   ;; Ships (horizontal)
+;; Ships (horizontal)
    [:div.supply-section
     [:strong "⛵ Ships: "]
     (for [[idx ship] (map-indexed vector (:ships game-data))]
       ^{:key idx} [:span.supply-chip
                    (if (:good ship)
-                     (str (name (:good ship)) " " (:amount ship) "/" (:capacity ship))
-                     (str "Empty/" (:capacity ship)))])]])
+                     (str (name (:good ship)) " " (:amount ship 0) "/" (:capacity ship 0))
+                     (str "Empty/" (:capacity ship 0)))])]])
 
 (defn game-log-ui []
   [:div.game-log
