@@ -163,33 +163,52 @@ body {
 }
 
 .role-card {
-    background: linear-gradient(135deg, #8B4513, #A0522D);
+    background: linear-gradient(135deg, #8B6914, #DAA520);
     color: white;
     padding: 12px 8px;
     border-radius: 8px;
     text-align: center;
     cursor: pointer;
     transition: all 0.3s ease;
-    border: 2px solid #654321;
+    border: 2px solid #B8860B;
     position: relative;
     font-size: 0.9em;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
 
 .role-card:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    border-color: #FFD700;
+}
+
+.role-card.disabled {
+    background: linear-gradient(135deg, #6c757d, #868e96);
+    border-color: #495057;
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+.role-card.disabled:hover {
+    transform: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    border-color: #495057;
 }
 
 .role-card h3 {
     margin: 0 0 5px 0;
-    font-size: 0.9em;
+    font-size: 1.0em;
     text-transform: capitalize;
+    font-weight: bold;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
 }
 
 .role-card p {
     margin: 0;
-    font-size: 0.8em;
-    opacity: 0.9;
+    font-size: 0.85em;
+    opacity: 0.95;
+    line-height: 1.2;
+    text-shadow: 1px 1px 1px rgba(0,0,0,0.2);
 }
 
 /* Gold coins - smaller */

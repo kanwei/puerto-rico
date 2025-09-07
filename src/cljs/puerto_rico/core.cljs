@@ -584,8 +584,10 @@
                [:div.roles-section-compact
                 [:h3 "🎭 Available Roles"]
                 [:div.roles-grid-compact
-                 (for [role (:available-roles game-data)]
-                   ^{:key role} [role-card role true (get-in game-data [:role-gold role] 0) handle-role-selection])]]))]
+                 (for [role state/roles]
+                   (let [available? (contains? (:available-roles game-data) role)
+                         gold-amount (get-in game-data [:role-gold role] 0)]
+                     ^{:key role} [role-card role available? gold-amount handle-role-selection]))]]))]
 
           [:div.sidebar
            [common-area game-data]
