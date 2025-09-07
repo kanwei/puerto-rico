@@ -20,8 +20,7 @@ The project follows a modern full-stack Clojure architecture with clean separati
 - **`src/cljc/puerto_rico/game/rules.cljc`** - Complete game rules implementation including all 7 role executions (Settler, Mayor, Builder, Craftsman, Trader, Captain, Prospector), move validation, and game flow control
 
 ### AI System (Shared CLJC)
-- **`src/cljc/puerto_rico/ai/mcts_fixed.cljc`** - Fixed Monte Carlo Tree Search implementation with move generation, random playouts, game state evaluation, and configurable difficulty levels
-- **`src/cljc/puerto_rico/ai/mcts.cljc`** - Alternative/experimental MCTS implementation
+- **`src/cljc/puerto_rico/ai/mcts.cljc`** - Fixed Monte Carlo Tree Search implementation with move generation, random playouts, game state evaluation, and configurable difficulty levels
 
 ### Backend Services (Clojure)
 - **`src/clj/puerto_rico/server.clj`** - HTTP API server with Ring/Compojure providing RESTful endpoints for game creation, moves, and AI turns
@@ -40,30 +39,28 @@ The project follows a modern full-stack Clojure architecture with clean separati
 ## Dependencies and Technologies
 
 ### Core Dependencies (deps.edn)
-- **Clojure 1.12.1** / **ClojureScript 1.11.132** - Core languages
+- **Clojure 1.12.2** / **ClojureScript 1.12.42** - Core languages (updated versions)
 - **Ring ecosystem** - Web server infrastructure
-  - `ring/ring-core 1.12.2` - Core web abstractions
-  - `ring/ring-jetty-adapter 1.12.2` - HTTP server
+  - `ring/ring-core 1.14.2` - Core web abstractions
+  - `ring/ring-jetty-adapter 1.14.2` - HTTP server
   - `ring/ring-json 0.5.1` - JSON middleware
   - `ring-cors/ring-cors 0.1.13` - CORS support
-- **Reitit 0.7.2** - Modern data-driven routing library with reitit-ring for Ring integration
-- **http-kit 2.8.0** - WebSocket and async HTTP support
-- **Cheshire 5.13.0** - JSON parsing and generation
-- **core.async 1.6.681** - Asynchronous programming primitives
+- **Reitit 0.9.1** - Modern data-driven routing library with reitit-ring for Ring integration
+- **http-kit 2.8.1** - WebSocket and async HTTP support
+- **Cheshire 6.1.0** - JSON parsing and generation
+- **core.async 1.8.741** - Asynchronous programming primitives
 - **math.combinatorics 0.3.0** - Mathematical utilities for game logic
 
 ### Frontend Dependencies
-- **Reagent 1.2.0** - React wrapper for ClojureScript
-- **re-frame 1.4.3** - State management framework (if used)
+- **Reagent 1.3.0** - React wrapper for ClojureScript
+- **re-frame 1.4.3** - State management framework
 - **cljs-ajax 0.8.4** - HTTP client for ClojureScript
-- **React 18.2.0** / **React DOM 18.2.0** - Frontend UI framework
 
 ### Development Tools
-- **Shadow-CLJS 2.28.15** - ClojureScript build tool and development environment
+- **Shadow-CLJS 3.2.0** - ClojureScript build tool and development environment
 - **tools.build 0.10.10** - Build automation
 - **nREPL 1.4.0** - Development REPL server
 - **test.check 1.1.1** - Property-based testing
-- **Babashka support** - Alternative Clojure runtime for scripting
 
 ## Available Tools and APIs
 
@@ -108,11 +105,10 @@ The project follows a modern full-stack Clojure architecture with clean separati
 ### Setup and Installation
 ```bash
 # Install dependencies
-npm install                        # Frontend React dependencies  
 clj -P                            # Download Clojure dependencies
 
 # Frontend development
-clj -M:shadow-cljs watch app      # Start development server (localhost:8700)
+clj -M:shadow-cljs watch app      # Start development server
 clj -M:shadow-cljs compile app    # Compile for production
 
 # Backend development  
@@ -124,9 +120,12 @@ clj -X:run-x                      # Start server with exec-fn (port 8080)
 ### Testing
 ```bash
 clj -M:test                       # Run Clojure tests
-bb test                          # Run tests with Babashka  
-bb test:all                      # Run with both Clojure and Babashka
-bb ci                           # Full CI pipeline
+```
+
+### Dependency Management
+```bash
+clj -M:outdated                   # Check for outdated dependencies
+clj -M:upgrade                    # Upgrade dependencies
 ```
 
 ### REPL Development
