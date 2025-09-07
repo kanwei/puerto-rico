@@ -305,6 +305,17 @@
           (update :trading-house conj {:good good-choice :player-id player-id}))
       game-state)))
 
+(defn award-victory-points
+  "Award victory points to a player, limited by available supply.
+   Returns updated game state and actual VPs awarded."
+  [game-state player-idx vps-requested]
+  (let [vps-available (:victory-point-supply game-state)
+        vps-to-award (min vps-requested vps-available)]
+    [(-> game-state
+         (update-in [:players player-idx :victory-points] + vps-to-award)
+         (update :victory-point-supply - vps-to-award))
+     vps-to-award]))
+
 (defn find-ship-for-good [ships good amount]
   "Find appropriate ship for shipping goods according to Puerto Rico rules:
    1. If any ship already contains ANY good and has space, that good MUST go there (if it matches)
@@ -358,10 +369,11 @@
         ship-choice (find-ship-for-good (:ships game-state) good-choice amount-to-ship)]
     (if (and good-choice (pos? amount-to-ship) ship-choice)
       (let [[ship-idx ship] ship-choice
-            actual-amount (min amount-to-ship (- (:capacity ship) (:amount ship)))]
-        (-> game-state
+            actual-amount (min amount-to-ship (- (:capacity ship) (:amount ship)))
+            ;; Award VPs using helper function that respects supply
+            [updated-game vps-awarded] (award-victory-points game-state player-idx actual-amount)]
+        (-> updated-game
             (update-in [:players player-idx :goods good-choice] - actual-amount)
-            (update-in [:players player-idx :victory-points] + actual-amount)
             (assoc-in [:ships ship-idx :good] good-choice)
             (update-in [:ships ship-idx :amount] + actual-amount)))
       game-state)))
