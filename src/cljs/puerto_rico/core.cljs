@@ -44,6 +44,11 @@
   (when-let [executor-idx (:role-execution-current-idx game-data)]
     (nth (:players game-data) executor-idx)))
 
+;; Forward declaration for function used before definition
+(declare handle-automatic-role-execution)
+
+;; Game logic handlers
+
 ;; Game logic handlers
 (defn handle-role-selection [role]
   (let [current-game (:game-state @game-state)
@@ -55,6 +60,11 @@
         (when (= role :prospector)
           (add-log-entry (str "💰 Gained 1 doubloon from Prospector") (:name current-player-data)))
         (swap! game-state assoc :game-state new-game-state)
+
+        ;; Auto-execute roles that don't require player choices
+        (when (contains? #{:mayor :craftsman} role)
+          (handle-automatic-role-execution new-game-state))
+
         (js/console.log "Role selected:" role "New game state:" new-game-state)))))
 
 ;; Role execution handlers
@@ -188,16 +198,17 @@
       ;; Auto-execute for this player and advance
       (let [current-game (:game-state @game-state)
             player-id (:id executor-player)
-            new-game-state (-> current-game
-                               (rules/execute-role selected-role player-id)
-                               (rules/advance-role-execution))]
+;; Execute the global role for entire table
+            game-after-execution (rules/execute-role current-game selected-role player-id)
+            ;; End the entire role execution phase (don't advance to next player)
+            new-game-state (rules/end-role-execution game-after-execution)]
         (let [action-text (case selected-role
-                            :mayor "👥 Got colonists"
-                            :craftsman "⚙️ Produced goods"
-                            "Executed")]
+                            :mayor "👥 Colonists distributed to all players"
+                            :craftsman "⚙️ All players produced goods"
+                            "Executed for all players")]
           (add-log-entry action-text (:name executor-player)))
         (swap! game-state assoc :game-state new-game-state)
-        (js/console.log "Auto-executed role" selected-role "for player" (:name executor-player))))))
+        (js/console.log "Auto-executed global role" selected-role "for entire table")))))
 
 ;; Game state watcher for AI turns
 (defn game-state-watcher []
@@ -309,9 +320,8 @@
 (defn role-execution-ui [game-data]
   (let [selected-role (:selected-role game-data)
         executor-player (current-role-executor game-data)]
-    ;; Auto-execute roles that don't require choices immediately
-    (when (contains? #{:mayor :craftsman} selected-role)
-      (handle-automatic-role-execution game-data))
+;; DO NOT auto-execute here - it causes multiple executions on every render
+    ;; Auto-execution should only happen once in handle-ai-turn or handle-role-selection
 
     (case selected-role
       :settler [plantation-choice-ui game-data]

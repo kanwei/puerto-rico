@@ -123,11 +123,8 @@
                                    (update :colonist-supply dec))
                                game-state)
 
-        ;; Step 2: Calculate ship distribution
-        ;; Players take from colonist ship one at a time, starting with mayor
+        ;; Step 2: Distribute ALL colonists from ship to players (round-robin from governor)
         colonists-on-ship (:colonist-ship game-after-privilege)
-
-        ;; Distribute colonists from ship (one at a time, clockwise from mayor)
         game-after-ship (if (> colonists-on-ship 0)
                           (loop [game game-after-privilege
                                  remaining-colonists colonists-on-ship
@@ -141,18 +138,19 @@
                                  next-player-idx))))
                           game-after-privilege)
 
-        ;; Step 3: Auto-place colonists for all players (simplified)
+        ;; Step 3: Auto-place colonists for ALL players
         game-after-placement (update game-after-ship :players
                                      (fn [players]
                                        (mapv auto-place-colonists players)))
 
-        ;; Step 4: Refill colonist ship
-        ;; Count empty building circles across all players (simplified for now)
+        ;; Step 4: Refill colonist ship based on empty building circles across ALL players
         total-empty-building-circles (reduce +
                                              (map (fn [player]
-                                                   ;; Simple calculation: each building has ~1 empty circle on average
-                                                   ;; This should be improved with proper circle counting
-                                                    (max 0 (- 3 (count (:buildings player)))))
+                                                    (reduce +
+                                                            (map (fn [building]
+                                                                   (max 0 (- (get-tile-capacity building)
+                                                                             (:colonists building))))
+                                                                 (:buildings player))))
                                                   (:players game-after-placement)))
 
         ;; Mayor should place at least as many colonists as there are players
@@ -163,10 +161,11 @@
                        (update :colonist-ship + colonists-available)
                        (update :colonist-supply - colonists-available))]
 
-    (println "Mayor executed:")
-    (println "  Privilege colonist given to role selector")
+    (println "Mayor executed (single action for entire table):")
+    (println "  Role selector privilege colonist:" (if (and role-selector-idx (> (:colonist-supply game-state) 0)) "given" "none available"))
     (println "  Colonists distributed from ship:" colonists-on-ship)
-    (println "  Colonists auto-placed on tiles")
+    (println "  All players auto-placed colonists")
+    (println "  Empty building circles across all players:" total-empty-building-circles)
     (println "  New colonists added to ship:" colonists-available)
     final-game))
 
@@ -403,11 +402,47 @@
 
 ;; Game phase management
 (defn end-role-execution [game-state]
-  "End current role execution and advance game state"
-  (-> game-state
-      (assoc :selected-role nil)
-      (assoc :role-player-idx nil)
-      (assoc :phase :role-selection)))
+  "End the current role execution and return to role selection phase"
+  ;; Skip all player turns and end the role immediately
+  (let [game-after-role (-> game-state
+                            (assoc :phase :role-selection)
+                            (assoc :selected-role nil)
+                            (assoc :role-selector-idx nil)
+                            (assoc :role-execution-order nil)
+                            (assoc :role-execution-current-idx nil)
+                            (assoc :current-player-idx (state/next-player-idx game-state)))
+        players-selected (:players-selected-this-round game-after-role)
+        num-players (count (:players game-after-role))]
+    ;; Check if round should end (each player has selected a role)
+    (if (>= players-selected num-players)
+      ;; Round is complete, start new round
+      (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))]
+        (-> game-after-role
+            (update :round inc)
+            (assoc :available-roles (set state/roles))
+            (assoc :used-roles #{})
+            ;; Add gold to unpicked roles BEFORE starting new round
+            (update :role-gold (fn [role-gold]
+                                 (reduce (fn [rg role]
+                                           (update rg role inc))
+                                         role-gold
+                                         unpicked-roles)))
+            ;; Rotate governor to next player
+            (assoc :governor-idx (mod (inc (:governor-idx game-after-role)) num-players))
+            (assoc :current-player-idx (mod (inc (:governor-idx game-after-role)) num-players)) ;; Governor goes first
+            (assoc :players-selected-this-round 0)
+            (assoc :phase :role-selection)
+            ;; Clear trading house
+            (assoc :trading-house [])
+            ;; Reset ships if full
+            (update :ships (fn [ships]
+                             (mapv (fn [ship]
+                                     (if (= (:amount ship) (:capacity ship))
+                                       (assoc ship :good nil :amount 0)
+                                       ship))
+                                   ships)))))
+      ;; Round continues with next player
+      game-after-role)))
 
 ; This function is no longer needed - round ending logic moved to advance-role-execution
 
