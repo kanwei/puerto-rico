@@ -275,15 +275,39 @@
                 ;; Combine all production
                                          total-production (assoc other-goods-production :corn corn-production)
 
-                ;; Update player's goods (limited by goods supply)
-                                         updated-goods (reduce (fn [goods [good-type amount]]
-                                                                 (if (and (> amount 0) (> (get-in game-state [:goods-supply good-type] 0) 0))
-                                                                   (update goods good-type + amount)
-                                                                   goods))
-                                                               (:goods player) total-production)]
+                ;; Limit production by goods supply availability
+                                         limited-production (reduce (fn [acc [good-type amount]]
+                                                                      (if (and (> amount 0) (> (get-in game-state [:goods-supply good-type] 0) 0))
+                                                                        (assoc acc good-type (min amount (get-in game-state [:goods-supply good-type] 0)))
+                                                                        acc))
+                                                                    {} total-production)
 
-                                     (println "Player" (:name player) "produced:" total-production)
-                                     (assoc player :goods updated-goods)))
+                ;; Calculate factory bonus if player has occupied factory
+                                         has-factory (has-occupied-building? player :factory)
+                                         goods-types-produced (count (filter #(> (second %) 0) limited-production))
+                                         factory-bonus (if (and has-factory (> goods-types-produced 1))
+                                                         (case goods-types-produced
+                                                           2 1 ; 2 kinds = 1 doubloon
+                                                           3 2 ; 3 kinds = 2 doubloons
+                                                           4 3 ; 4 kinds = 3 doubloons
+                                                           5 5 ; 5 kinds = 5 doubloons
+                                                           0) ; 1 or 0 kinds = no bonus
+                                                         0)
+
+                ;; Update player's goods
+                                         updated-goods (reduce (fn [goods [good-type amount]]
+                                                                 (update goods good-type + amount))
+                                                               (:goods player) limited-production)
+
+                ;; Add factory bonus to money
+                                         updated-player (-> player
+                                                            (assoc :goods updated-goods)
+                                                            (update :money + factory-bonus))]
+
+                                     (println "Player" (:name player) "produced:" limited-production)
+                                     (when (> factory-bonus 0)
+                                       (println "  Factory bonus:" factory-bonus "doubloons for" goods-types-produced "kinds of goods"))
+                                     updated-player))
 
         ;; Update all players
         updated-players (mapv produce-goods-for-player (:players game-state))
