@@ -371,6 +371,16 @@
        [:h2 "Role Execution"]
        [:p "Role " (name selected-role) " is being executed..."]])))
 
+(defn worker-slots-display [occupied total]
+  "Display worker slots as filled/empty circles"
+  (let [filled (repeat occupied "●")
+        empty (repeat (- total occupied) "○")]
+    (str (apply str filled) (apply str empty))))
+
+(defn get-building-capacity [building-type]
+  "Get the worker capacity for a building type"
+  (get-in state/buildings [building-type :worker] 1))
+
 (defn player-board [player current?]
   [:div.player-board {:class (when current? "current-player")}
    [:div.player-header
@@ -381,23 +391,27 @@
      [:span.san-juan "🏘️" (get player :san-juan-colonists 0)]]]
 
    [:div.player-assets
-    ;; Buildings (more compact)
+;; Buildings (more compact)
     (when (seq (:buildings player))
       [:div.buildings-compact
        [:strong "🏢 "]
        (for [[idx building] (map-indexed vector (:buildings player))]
-         ^{:key idx} [:span.building-chip
-                      (str (if (map? building) (name (:type building)) (name building))
-                           "[" (if (map? building) (:colonists building 0) 0) "]")])])
+         (let [building-type (if (map? building) (:type building) building)
+               occupied (if (map? building) (:colonists building 0) 0)
+               total-capacity (get-building-capacity building-type)]
+           ^{:key idx} [:span.building-chip
+                        (str (name building-type) " " (worker-slots-display occupied total-capacity))]))])
 
-    ;; Plantations (more compact)
+;; Plantations (more compact)
     (when (seq (:plantations player))
       [:div.plantations-compact
        [:strong "🌱 "]
        (for [[idx plantation] (map-indexed vector (:plantations player))]
-         ^{:key idx} [:span.plantation-chip
-                      (str (if (map? plantation) (name (:type plantation)) (name plantation))
-                           "[" (if (map? plantation) (:colonists plantation 0) 0) "]")])])
+         (let [plantation-type (if (map? plantation) (:type plantation) plantation)
+               occupied (if (map? plantation) (:colonists plantation 0) 0)
+               total-capacity 1] ; plantations always have 1 worker slot
+           ^{:key idx} [:span.plantation-chip
+                        (str (name plantation-type) " " (worker-slots-display occupied total-capacity))]))])
 
     ;; Goods (inline)
     (let [goods-with-amounts (filter #(> (second %) 0) (:goods player))]
