@@ -505,6 +505,48 @@
               (update :used-roles conj role)))))
     game-state))
 
+(defn calculate-warehouse-storage [player]
+  "Calculate how many goods types a player can store based on warehouses"
+  (let [has-small-warehouse (has-occupied-building? player :small-warehouse)
+        has-large-warehouse (has-occupied-building? player :large-warehouse)]
+    (cond
+      ;; Both warehouses: can store 3 types (1 base + 1 small + 2 large, but note says 3 total)
+      (and has-small-warehouse has-large-warehouse) 3
+      ;; Large warehouse only: can store 3 types (1 base + 2 large)
+      has-large-warehouse 3
+      ;; Small warehouse only: can store 2 types (1 base + 1 small)
+      has-small-warehouse 2
+      ;; No warehouses: can store 1 type (base storage)
+      :else 1)))
+
+(defn apply-storage-rules [game-state]
+  "Apply storage rules at end of captain phase - players must discard excess goods"
+  (update game-state :players
+          (fn [players]
+            (mapv (fn [player]
+                    (let [current-goods (:goods player)
+                          goods-with-amounts (filter #(pos? (second %)) current-goods)
+                          goods-types-count (count goods-with-amounts)
+                          max-storable-types (calculate-warehouse-storage player)]
+                      (if (<= goods-types-count max-storable-types)
+                        ;; Player can store all their goods
+                        player
+                        ;; Player must choose which goods to keep
+                        ;; For now, keep the most valuable goods (coffee > tobacco > sugar > indigo > corn)
+                        ;; TODO: This should be a player choice in the UI
+                        (let [goods-priority {:coffee 5 :tobacco 4 :sugar 3 :indigo 2 :corn 1}
+                              sorted-goods (sort-by #(get goods-priority (first %) 0) > goods-with-amounts)
+                              goods-to-keep (take max-storable-types sorted-goods)
+                              goods-to-discard (drop max-storable-types sorted-goods)
+                              ;; Calculate new goods amounts (keep all of the storable types)
+                              new-goods (reduce (fn [goods [good-type amount]]
+                                                  (assoc goods good-type amount))
+                                                {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
+                                                goods-to-keep)]
+                          ;; Update player's goods (goods are returned to supply automatically)
+                          (assoc player :goods new-goods)))))
+                  players))))
+
 (defn advance-role-execution [game-state]
   "Move to the next player in role execution order, or end role if all players have executed"
   (let [execution-order (:role-execution-order game-state)
@@ -514,21 +556,24 @@
     (if (>= next-position (count execution-order))
       ;; All players have executed the role, back to role selection
       (let [completed-role (:selected-role game-state)
-            game-after-role (-> game-state
-                                (assoc :phase :role-selection)
-                                (assoc :selected-role nil)
-                                (assoc :role-selector-idx nil)
-                                (assoc :role-execution-order nil)
-                                (assoc :role-execution-current-idx nil)
-                                (assoc :current-player-idx (state/next-player-idx game-state))
-                            ;; If Captain role just finished, empty full ships
-                                (cond-> (= completed-role :captain)
-                                  (update :ships (fn [ships]
-                                                   (mapv (fn [ship]
-                                                           (if (= (:amount ship) (:capacity ship))
-                                                             (assoc ship :good nil :amount 0)
-                                                             ship))
-                                                         ships)))))
+            game-after-role (let [base-game (-> game-state
+                                                (assoc :phase :role-selection)
+                                                (assoc :selected-role nil)
+                                                (assoc :role-selector-idx nil)
+                                                (assoc :role-execution-order nil)
+                                                (assoc :role-execution-current-idx nil)
+                                                (assoc :current-player-idx (state/next-player-idx game-state)))]
+                              ;; If Captain role just finished, apply storage rules and empty full ships
+                              (if (= completed-role :captain)
+                                (-> base-game
+                                    (apply-storage-rules)
+                                    (update :ships (fn [ships]
+                                                     (mapv (fn [ship]
+                                                             (if (= (:amount ship) (:capacity ship))
+                                                               (assoc ship :good nil :amount 0)
+                                                               ship))
+                                                           ships))))
+                                base-game))
             players-selected (:players-selected-this-round game-after-role)
             num-players (count (:players game-after-role))]
         ;; Check if round should end (each player has selected a role)
