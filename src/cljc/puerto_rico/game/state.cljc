@@ -164,11 +164,19 @@
      :face-up-plantations face-up-plantations
      :quarry-supply quarry-count
      :goods-supply {:corn 10 :indigo 11 :sugar 11 :tobacco 9 :coffee 9}
-     :colonist-supply 95
+     :colonist-supply (case num-players
+                        3 55
+                        4 75
+                        5 95
+                        95) ; default to full supply
      ;; Colonist ship for Mayor role (starts with number of players)
      :colonist-ship (count players-with-plantations)
      :building-supply (create-building-supply buildings)
-     :victory-point-supply 122
+     :victory-point-supply (case num-players
+                             3 75
+                             4 100
+                             5 122
+                             122) ; default to full supply
      :ships [{:capacity 4 :good nil :amount 0}
              {:capacity 5 :good nil :amount 0}
              {:capacity 6 :good nil :amount 0}]
