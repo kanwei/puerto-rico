@@ -195,18 +195,87 @@
       game-state)))
 
 (defn execute-craftsman [game-state]
-  "Execute the craftsman role - produce goods"
-  ;; Simple implementation: each player with plantations produces 1 good
-  ;; TODO: Implement proper production based on buildings + plantations + colonists
-  (let [executor-idx (:role-execution-current-idx game-state)
-        player (get-in game-state [:players executor-idx])
-        ;; For now, just give 1 corn if they have corn plantation
-        has-corn-plantation (some #(= % :corn) (:plantations player))
-        new-player (if has-corn-plantation
-                     (update-in player [:goods :corn] inc)
-                     player)]
-    (println "Craftsman role executed for player" (:name player))
-    (assoc-in game-state [:players executor-idx] new-player)))
+  "Execute the craftsman role - all players produce goods"
+  (let [role-selector-idx (:role-selector-idx game-state)
+
+        ;; Function to produce goods for a single player
+        produce-goods-for-player (fn [player]
+                                   (let [;; Get occupied plantations (have at least 1 colonist)
+                                         occupied-plantations (filter #(and (:colonists %) (> (:colonists %) 0)) (:plantations player))
+;; Get occupied production buildings
+                                         occupied-production-buildings (filter #(and (:colonists %) (> (:colonists %) 0)
+                                                                                     ;; Check if building is a production type
+                                                                                     (let [building-info (get state/buildings (:type %))]
+                                                                                       (= (:type building-info) :production))) (:buildings player))
+
+                ;; Corn is special - it produces without a building
+                                         corn-plantations (filter #(= (:type %) :corn) occupied-plantations)
+                                         corn-production (count corn-plantations)
+
+                ;; Other goods need both plantation and production building
+                                         other-goods-production
+                                         (reduce (fn [acc building]
+                                                   (let [building-info (get state/buildings (:type building))
+                                                         good-type (:good building-info)
+                                                         matching-plantations (filter #(= (:type %) good-type) occupied-plantations)]
+                                                     (if (seq matching-plantations)
+                              ;; Can produce this good (have both plantation and building)
+                                                       (assoc acc good-type (min (count matching-plantations)
+                                                                                 (:colonists building)))
+                                                       acc)))
+                                                 {} occupied-production-buildings)
+
+                ;; Combine all production
+                                         total-production (assoc other-goods-production :corn corn-production)
+
+                ;; Update player's goods (limited by goods supply)
+                                         updated-goods (reduce (fn [goods [good-type amount]]
+                                                                 (if (and (> amount 0) (> (get-in game-state [:goods-supply good-type] 0) 0))
+                                                                   (update goods good-type + amount)
+                                                                   goods))
+                                                               (:goods player) total-production)]
+
+                                     (println "Player" (:name player) "produced:" total-production)
+                                     (assoc player :goods updated-goods)))
+
+        ;; Update all players
+        updated-players (mapv produce-goods-for-player (:players game-state))
+
+        ;; Calculate total goods produced to reduce from supply
+        total-goods-produced (reduce (fn [acc player]
+                                       (merge-with + acc
+                                                   (reduce (fn [player-prod [good-type amount]]
+                                                             (let [old-amount (get-in (:players game-state) [(.indexOf (:players game-state) player) :goods good-type] 0)
+                                                                   new-amount (get-in player [:goods good-type] 0)
+                                                                   produced (- new-amount old-amount)]
+                                                               (if (> produced 0)
+                                                                 (assoc player-prod good-type produced)
+                                                                 player-prod)))
+                                                           {} (:goods player))))
+                                     {} updated-players)
+
+        ;; Update goods supply
+        updated-goods-supply (merge-with - (:goods-supply game-state) total-goods-produced)
+
+        ;; Role selector gets privilege: +1 extra good if they produced anything
+        final-players (if role-selector-idx
+                        (let [role-selector (nth updated-players role-selector-idx)
+                              ;; Find what goods they produced
+                              produced-goods (filter #(> (get-in role-selector [:goods %] 0) 0) [:corn :indigo :sugar :tobacco :coffee])]
+                          (if (seq produced-goods)
+                            ;; Give +1 of the first good type they produced
+                            (let [privilege-good (first produced-goods)]
+                              (println "Role selector gets privilege:" privilege-good)
+                              (assoc-in updated-players [role-selector-idx :goods privilege-good]
+                                        (inc (get-in role-selector [:goods privilege-good] 0))))
+                            updated-players))
+                        updated-players)]
+
+    (println "Craftsman executed (all players produce goods)")
+    (println "Total goods produced:" total-goods-produced)
+    (-> game-state
+        (assoc :players final-players)
+        (assoc :goods-supply updated-goods-supply))))
 
 (defn can-trade-good? [game-state player good]
   "Check if player can trade a specific good"

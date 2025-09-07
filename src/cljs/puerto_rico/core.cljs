@@ -279,11 +279,16 @@
         [:div.choice-grid
          (for [[building-key building-info] affordable-buildings]
            ^{:key building-key}
-           [:div.choice-card {:on-click #(handle-building-choice building-key)}
+           [:div.choice-card.building-card {:on-click #(handle-building-choice building-key)}
             [:h3 (name building-key)]
-            [:p "Cost: $" (:cost building-info)]
-            [:p "VP: " (:vp building-info)]
-            [:p "Available: " (get (:building-supply game-data) building-key 0)]])]]
+            [:div.building-stats
+             [:p "Cost: $" (:cost building-info)]
+             [:p "VP: " (:vp building-info)]
+             [:p "Workers: " (:worker building-info)]
+             [:p "Available: " (get (:building-supply game-data) building-key 0)]]
+            (when (:description building-info)
+              [:div.building-description
+               [:p.description-text (:description building-info)]])])]]
        [:div
         [:p (:name current-player-data) " cannot afford any buildings (You have $" (:money current-player-data) ")."]
         [:div.choice-grid
