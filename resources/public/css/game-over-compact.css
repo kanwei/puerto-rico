@@ -1,0 +1,209 @@
+/* Compact Game Over Styles for Main Pane */
+.game-over-main-pane {
+  background: linear-gradient(135deg, #2c3e50, #34495e);
+  border-radius: 12px;
+  padding: 20px;
+  color: white;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.game-over-header-compact {
+  text-align: center;
+  margin-bottom: 20px;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+  padding-bottom: 15px;
+}
+
+.game-over-header-compact h2 {
+  margin: 0 0 10px 0;
+  font-size: 1.8em;
+  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.winner-compact {
+  font-size: 1.1em;
+}
+
+.winner-name {
+  color: #f1c40f;
+  font-weight: bold;
+}
+
+.winner-score {
+  color: #ecf0f1;
+  font-weight: bold;
+}
+
+/* Final Scores */
+.final-scores-compact h3 {
+  color: #ecf0f1;
+  margin-bottom: 15px;
+  font-size: 1.2em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  padding-bottom: 8px;
+}
+
+.player-result-compact {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  margin: 10px 0;
+  padding: 12px;
+  border: 2px solid transparent;
+  transition: all 0.3s ease;
+}
+
+.player-result-compact.winner-highlight {
+  border-color: #f1c40f;
+  background: rgba(241, 196, 15, 0.15);
+  box-shadow: 0 0 10px rgba(241, 196, 15, 0.3);
+}
+
+.player-info-compact {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.player-name-compact {
+  font-size: 1.1em;
+  font-weight: bold;
+  color: #ecf0f1;
+}
+
+.player-score-compact {
+  font-size: 1.2em;
+  font-weight: bold;
+  color: #f1c40f;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+
+/* Compact VP Breakdown */
+.vp-breakdown-compact {
+  font-size: 0.9em;
+}
+
+.vp-summary {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.vp-category-compact {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 4px 8px;
+  border-radius: 6px;
+  min-width: 40px;
+}
+
+.vp-icon {
+  font-size: 1em;
+}
+
+.vp-value {
+  color: #e74c3c;
+  font-weight: bold;
+  font-size: 1em;
+}
+
+.vp-total-compact {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  margin-top: 8px;
+}
+
+.vp-total-label {
+  color: #bdc3c7;
+  font-weight: 500;
+}
+
+.vp-total-value {
+  color: #f1c40f;
+  font-weight: bold;
+  font-size: 1.1em;
+}
+
+/* Compact Actions */
+.game-over-actions-compact {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 20px;
+  padding-top: 15px;
+  border-top: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.new-game-compact, .ai-game-compact {
+  padding: 10px 20px;
+  font-size: 1em;
+  font-weight: bold;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  color: white;
+}
+
+.new-game-compact {
+  background: linear-gradient(135deg, #27ae60, #2ecc71);
+}
+
+.new-game-compact:hover {
+  background: linear-gradient(135deg, #2ecc71, #27ae60);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(46, 204, 113, 0.3);
+}
+
+.ai-game-compact {
+  background: linear-gradient(135deg, #8e44ad, #9b59b6);
+}
+
+.ai-game-compact:hover {
+  background: linear-gradient(135deg, #9b59b6, #8e44ad);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(155, 89, 182, 0.3);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .game-over-main-pane {
+    padding: 15px;
+  }
+  
+  .game-over-header-compact h2 {
+    font-size: 1.5em;
+  }
+  
+  .player-info-compact {
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+  }
+  
+  .vp-summary {
+    justify-content: center;
+  }
+  
+  .game-over-actions-compact {
+    flex-direction: column;
+  }
+  
+  .new-game-compact, .ai-game-compact {
+    width: 100%;
+  }
+}

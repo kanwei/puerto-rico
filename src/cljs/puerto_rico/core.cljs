@@ -681,37 +681,58 @@
     [:span.vp-label "🏆 Total:"]
     [:span.vp-value.total (:total-vps player-breakdown)]]])
 
-(defn game-over-overlay [game-data]
-  "Game over overlay that shows within the main game window"
+(defn victory-points-breakdown-compact [player-breakdown]
+  "Compact VP breakdown component for main pane display"
+  [:div.vp-breakdown-compact
+   [:div.vp-summary
+    [:div.vp-category-compact
+     [:span.vp-icon "🚢"]
+     [:span.vp-value (:shipping-vps player-breakdown)]]
+    [:div.vp-category-compact
+     [:span.vp-icon "🏗️"]
+     [:span.vp-value (:building-vps player-breakdown)]]
+    [:div.vp-category-compact
+     [:span.vp-icon "📦"]
+     [:span.vp-value (:goods-vps player-breakdown)]]
+    (when (pos? (:large-building-bonuses player-breakdown))
+      [:div.vp-category-compact
+       [:span.vp-icon "🏛️"]
+       [:span.vp-value (:large-building-bonuses player-breakdown)]])]
+   [:div.vp-total-compact
+    [:span.vp-total-label "Total: "]
+    [:span.vp-total-value (:total-vps player-breakdown)]]])
+
+(defn game-over-main-pane [game-data]
+  "Game over display in the main action area"
   (let [players-with-breakdown (map (fn [player]
                                       (let [breakdown (state/calculate-victory-points-breakdown player)]
                                         (assoc player :vp-breakdown breakdown)))
                                     (:players game-data))
         sorted-players (sort-by #(get-in % [:vp-breakdown :total-vps]) > players-with-breakdown)
         winner (first sorted-players)]
-    [:div.game-over-overlay
-     [:div.game-over-content
-      [:div.game-over-header
-       [:h1 "🏆 Game Over!"]
-       [:h2.winner-announcement
-        "👑 " (:name winner) " Wins!"
-        [:span.winner-score " (" (get-in winner [:vp-breakdown :total-vps]) " VP)"]]]
+    [:div.game-over-main-pane
+     [:div.game-over-header-compact
+      [:h2 "🏆 Game Over!"]
+      [:div.winner-compact
+       [:span "👑 Winner: "]
+       [:span.winner-name (:name winner)]
+       [:span.winner-score " (" (get-in winner [:vp-breakdown :total-vps]) " VP)"]]]
 
-      [:div.final-scores-detailed
-       [:h3 "Final Scores & Breakdown:"]
-       (for [player sorted-players]
-         ^{:key (:id player)}
-         [:div.player-final-result {:class (when (= player winner) "winner")}
-          [:div.player-header
-           [:span.player-name (:name player)]
-           [:span.player-final-score (get-in player [:vp-breakdown :total-vps]) " VP"]]
-          [victory-points-breakdown (:vp-breakdown player)]])]
+     [:div.final-scores-compact
+      [:h3 "Final Scores:"]
+      (for [player sorted-players]
+        ^{:key (:id player)}
+        [:div.player-result-compact {:class (when (= player winner) "winner-highlight")}
+         [:div.player-info-compact
+          [:span.player-name-compact (:name player)]
+          [:span.player-score-compact (get-in player [:vp-breakdown :total-vps]) " VP"]]
+         [victory-points-breakdown-compact (:vp-breakdown player)]])]
 
-      [:div.game-over-actions
-       [:button.new-game-btn {:on-click #(swap! game-state assoc :game-state (create-new-game))}
-        "🆕 New Game"]
-       [:button.ai-game-btn {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
-        "🤖 AI vs AI"]]]]))
+     [:div.game-over-actions-compact
+      [:button.new-game-compact {:on-click #(swap! game-state assoc :game-state (create-new-game))}
+       "New Game"]
+      [:button.ai-game-compact {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
+       "AI vs AI"]]]))
 
 (defn game-board []
   (let [game-data (game-state-watcher)]
@@ -721,11 +742,9 @@
       (let [current-player-data (current-player game-data)]
         [:div.game-board-compact
          ;; Game over overlay (if game is over)
-         (when (:game-over game-data)
-           [game-over-overlay game-data])
 
-         ;; Compact header bar
-         [:div.header-bar {:class (when (:game-over game-data) "game-over-dimmed")}
+;; Compact header bar
+         [:div.header-bar
           [:h2 "🏝️ Puerto Rico"]
           [:div.game-status
            [:span.status-item "📅 Round " (:round game-data)]
@@ -739,13 +758,13 @@
                                       "None")]]]
 
          ;; Players in horizontal row (compact)
-         [:div.players-row {:class (when (:game-over game-data) "game-over-dimmed")}
+         [:div.players-row
           (for [[idx player] (map-indexed vector (:players game-data))]
             ^{:key (:id player)}
             [player-board player (= idx (:current-player-idx game-data))])]
 
          ;; Main action area and common area side by side
-         [:div.main-area {:class (when (:game-over game-data) "game-over-dimmed")}
+         [:div.main-area
           [:div.action-area
            (let [executor (current-role-executor game-data)
                  ;; Determine if we need to show AI button
@@ -759,11 +778,9 @@
                              ;; Default
                              :else nil)]
              (cond
-               ;; Don't show action UI if game is over
+;; Show game over screen in main pane
                (:game-over game-data)
-               [:div.game-ended
-                [:h3 "🏁 Game Complete"]
-                [:p "See final scores above"]]
+               [game-over-main-pane game-data]
 
                ;; Auto-execute AI turns with visual feedback
                ai-player
