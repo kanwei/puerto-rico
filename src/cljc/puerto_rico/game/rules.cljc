@@ -306,16 +306,45 @@
       game-state)))
 
 (defn find-ship-for-good [ships good amount]
-  "Find appropriate ship for shipping goods"
-  (->> ships
-       (map-indexed vector)
-       (filter (fn [[idx ship]]
-                 (or (nil? (:good ship))
-                     (= (:good ship) good))))
-       (filter (fn [[idx ship]]
-                 (>= (- (:capacity ship) (:amount ship)) amount)))
-       (sort-by (fn [[idx ship]] (:capacity ship)))
-       first))
+  "Find appropriate ship for shipping goods according to Puerto Rico rules:
+   1. If any ship already contains ANY good and has space, that good MUST go there (if it matches)
+   2. Only if no partially filled ships can accept the good can you use an empty ship
+   3. You cannot choose between multiple valid ships - the rules determine which ship to use"
+  (let [;; Separate ships into partially filled and empty
+        partially-filled-ships (->> ships
+                                    (map-indexed vector)
+                                    (filter (fn [[idx ship]]
+                                              (and (:good ship) (pos? (:amount ship))))))
+        empty-ships (->> ships
+                         (map-indexed vector)
+                         (filter (fn [[idx ship]]
+                                   (nil? (:good ship)))))
+
+        ;; Check if any partially filled ship can accept this good type
+        compatible-filled-ship (->> partially-filled-ships
+                                    (filter (fn [[idx ship]]
+                                              (and (= (:good ship) good)
+                                                   (>= (- (:capacity ship) (:amount ship)) amount))))
+                                    (first))
+
+        ;; Find the smallest empty ship that can hold the goods
+        compatible-empty-ship (->> empty-ships
+                                   (filter (fn [[idx ship]]
+                                             (>= (:capacity ship) amount)))
+                                   (sort-by (fn [[idx ship]] (:capacity ship)))
+                                   (first))]
+
+    ;; Puerto Rico rule: MUST use partially filled ship if available for this good type
+    (cond
+      ;; Rule 1: If there's a partially filled ship with the same good type, MUST use it
+      compatible-filled-ship compatible-filled-ship
+
+      ;; Rule 2: Only if no partially filled ship works, can use empty ship
+      (and (nil? compatible-filled-ship) compatible-empty-ship)
+      compatible-empty-ship
+
+      ;; Rule 3: Cannot ship if no valid ship exists
+      :else nil)))
 
 (defn execute-captain [game-state player-id good-choice]
   "Execute the captain role - ship goods"

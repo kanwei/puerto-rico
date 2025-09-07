@@ -2,7 +2,7 @@
   "Puerto Rico game demonstration"
   (:require [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]
-            [puerto-rico.ai.mcts-fixed :as ai]))
+            [puerto-rico.ai.mcts_fixed :as ai]))
 
 (defn create-demo-game []
   "Create a demo game with human and AI players"

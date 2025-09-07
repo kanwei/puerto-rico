@@ -1,4 +1,4 @@
-(ns puerto-rico.ai.mcts-fixed
+(ns puerto-rico.ai.mcts_fixed
   "Fixed Monte Carlo Tree Search implementation for Puerto Rico AI players"
   (:require [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]))
