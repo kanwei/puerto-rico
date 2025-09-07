@@ -156,8 +156,17 @@
                   :settler
                   (let [face-up-plantations (:face-up-plantations current-game)
                         quarry-supply (:quarry-supply current-game)
+                        executor-player (current-role-executor current-game)
+                        role-selector-idx (:role-selector-idx current-game)
+                        current-player-idx (:role-execution-current-idx current-game)
+                        is-role-selector (= current-player-idx role-selector-idx)
+                        has-construction-hut (some #(and (= (:type %) :construction-hut)
+                                                         (:colonists %)
+                                                         (pos? (:colonists %)))
+                                                   (:buildings executor-player))
+                        can-take-quarry (and (pos? quarry-supply) (or is-role-selector has-construction-hut))
                         available-choices (concat face-up-plantations
-                                                  (when (pos? quarry-supply) [:quarry]))]
+                                                  (when can-take-quarry [:quarry]))]
                     (when (seq available-choices)
                       (let [choice (rand-nth available-choices)]
                         (handle-plantation-choice choice))))
@@ -251,19 +260,28 @@
          [:div.choice-card {:on-click #(handle-plantation-choice plantation-type)}
           [:h3 (name plantation-type)]])
 
-       ;; Quarry choice (if available)
-       (when (pos? quarry-supply)
-         ^{:key "quarry"}
-         [:div.choice-card {:on-click #(handle-plantation-choice :quarry)}
-          [:h3 "quarry"]
-          [:p "Available: " quarry-supply]])
+;; Quarry choice (only if player qualifies)
+       (let [role-selector-idx (:role-selector-idx game-data)
+             current-player-idx (:role-execution-current-idx game-data)
+             is-role-selector (= current-player-idx role-selector-idx)
+             has-construction-hut (some #(and (= (:type %) :construction-hut)
+                                              (:colonists %)
+                                              (pos? (:colonists %)))
+                                        (:buildings current-player-data))
+             can-take-quarry (and (pos? quarry-supply) (or is-role-selector has-construction-hut))]
+         (when can-take-quarry
+           ^{:key "quarry"}
+           [:div.choice-card {:on-click #(handle-plantation-choice :quarry)}
+            [:h3 "quarry"]
+            [:p "Available: " quarry-supply]
+            (when-not is-role-selector
+              [:p.privilege-text "Construction Hut allows quarry"])]))
 
-       ;; Skip option if nothing available
-       (when (and (empty? face-up-plantations) (zero? (or quarry-supply 0)))
-         ^{:key "skip"}
-         [:div.choice-card.skip {:on-click #(handle-skip-role :settler)}
-          [:h3 "Skip"]
-          [:p "No plantations left"]])]]]))
+;; Skip option (always available)
+       ^{:key "skip"}
+       [:div.choice-card.skip {:on-click #(handle-skip-role :settler)}
+        [:h3 "Skip"]
+        [:p "Don't take any tile"]]]]]))
 
 (defn building-choice-ui [game-data]
   (let [current-player-data (current-role-executor game-data)
