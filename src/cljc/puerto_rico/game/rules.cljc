@@ -120,39 +120,74 @@
   "Get number of empty spaces on a tile"
   (- (get-tile-capacity tile) (:colonists tile 0)))
 
-(defn auto-place-colonists [player]
-  "Automatically place colonists for a player on tiles with empty circles"
+(defn smart-place-colonists [player]
+  "Intelligently place colonists to maximize production and efficiency"
   (let [colonists-to-place (+ (:colonists-in-hand player) (:san-juan-colonists player))
-        ;; Get all tiles (plantations and buildings) with their empty spaces
-        plantations-with-spaces (map-indexed
-                                 (fn [idx plantation]
-                                   {:idx idx :type :plantation :tile plantation :empty-spaces (get-empty-spaces plantation)})
-                                 (:plantations player))
-        buildings-with-spaces (map-indexed
-                               (fn [idx building]
-                                 {:idx idx :type :building :tile building :empty-spaces (get-empty-spaces building)})
-                               (:buildings player))
 
-        ;; Combine all tiles with empty spaces
-        all-empty-spaces (filter #(> (:empty-spaces %) 0)
-                                 (concat plantations-with-spaces buildings-with-spaces))
+        ;; Get all plantation and building info with spaces
+        plantations (map-indexed
+                     (fn [idx p] {:idx idx :type :plantation :tile p
+                                  :good-type (:type p) :empty (get-empty-spaces p)})
+                     (:plantations player))
+        buildings (map-indexed
+                   (fn [idx b] {:idx idx :type :building :tile b
+                                :good-type (get-in state/buildings [(:type b) :good])
+                                :empty (get-empty-spaces b)})
+                   (:buildings player))
 
-        ;; Sort by empty spaces (prioritize tiles with more spaces)
-        sorted-spaces (sort-by :empty-spaces > all-empty-spaces)
+        ;; Find production chains (plantation + building for same good)
+        production-chains (for [p plantations
+                                b buildings
+                                :when (and (:good-type p) (:good-type b)
+                                           (= (:good-type p) (:good-type b))
+                                           (> (:empty p) 0) (> (:empty b) 0))]
+                            {:plantation p :building b :good (:good-type p)})
 
-        ;; Place colonists on tiles
+;; Priority scoring function
+        score-placement (fn [item]
+                          (cond
+                            ;; Highest priority: Complete production chains
+                            (some (fn [chain] (or (= item (:plantation chain))
+                                                  (= item (:building chain))))
+                                  production-chains) 100
+                            ;; Very high priority: Utility buildings (warehouses, hacienda, etc)
+                            (and (= (:type item) :building)
+                                 (contains? #{:small-warehouse :large-warehouse :hacienda
+                                              :construction-hut :hospice :small-market :large-market
+                                              :office :factory :university :harbor :wharf}
+                                            (get-in item [:tile :type]))) 90
+                            ;; High priority: Quarries (building discounts)  
+                            (and (= (:type item) :plantation)
+                                 (= (:good-type item) :quarry)) 80
+                            ;; Medium priority: Production buildings without matching plantations
+                            (and (= (:type item) :building) (:good-type item)) 50
+                            ;; Lower priority: Plantations without matching buildings
+                            (and (= (:type item) :plantation) (:good-type item)) 30
+                            ;; Lowest: Large buildings (usually only 1 worker slot)
+                            (and (= (:type item) :building)
+                                 (contains? #{:guild-hall :residence :customs-house :city-hall :fortress}
+                                            (get-in item [:tile :type]))) 10
+                            ;; Default
+                            :else 20))
+
+        ;; Get all placeable items and sort by strategic value
+        all-items (concat plantations buildings)
+        items-with-spaces (filter #(> (:empty %) 0) all-items)
+        sorted-items (sort-by score-placement > items-with-spaces)
+
+        ;; Place colonists strategically
         [updated-player remaining-colonists]
-        (reduce (fn [[player remaining] space-info]
+        (reduce (fn [[player remaining] item]
                   (if (<= remaining 0)
                     [player remaining]
-                    (let [spaces-to-fill (min remaining (:empty-spaces space-info))
-                          tile-path (if (= (:type space-info) :plantation)
-                                      [:plantations (:idx space-info)]
-                                      [:buildings (:idx space-info)])]
+                    (let [spaces-to-fill (min remaining (:empty item))
+                          tile-path (if (= (:type item) :plantation)
+                                      [:plantations (:idx item)]
+                                      [:buildings (:idx item)])]
                       [(update-in player (conj tile-path :colonists) + spaces-to-fill)
                        (- remaining spaces-to-fill)])))
                 [player colonists-to-place]
-                sorted-spaces)]
+                sorted-items)]
 
     (-> updated-player
         (assoc :colonists-in-hand 0)
@@ -185,10 +220,10 @@
                                  next-player-idx))))
                           game-after-privilege)
 
-        ;; Step 3: Auto-place colonists for ALL players
+;; Step 3: Smart-place colonists for ALL players
         game-after-placement (update game-after-ship :players
                                      (fn [players]
-                                       (mapv auto-place-colonists players)))
+                                       (mapv smart-place-colonists players)))
 
         ;; Step 4: Refill colonist ship based on empty building circles across ALL players
         total-empty-building-circles (reduce +
