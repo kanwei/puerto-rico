@@ -66,9 +66,17 @@
 
 (defn execute-craftsman [game-state]
   "Execute the craftsman role - produce goods"
-  ;; Simplified version to avoid null pointer issues for now
-  (println "Craftsman role executed (simplified version)")
-  game-state)
+  ;; Simple implementation: each player with plantations produces 1 good
+  ;; TODO: Implement proper production based on buildings + plantations + colonists
+  (let [executor-idx (:role-execution-current-idx game-state)
+        player (get-in game-state [:players executor-idx])
+        ;; For now, just give 1 corn if they have corn plantation
+        has-corn-plantation (some #(= % :corn) (:plantations player))
+        new-player (if has-corn-plantation
+                     (update-in player [:goods :corn] inc)
+                     player)]
+    (println "Craftsman role executed for player" (:name player))
+    (assoc-in game-state [:players executor-idx] new-player)))
 
 (defn can-trade-good? [game-state player good]
   "Check if player can trade a specific good"

@@ -170,7 +170,11 @@
                            (handle-good-choice good selected-role))
                          (handle-skip-role selected-role)))
 
-                     ;; For other roles, do nothing (they execute automatically)
+                     ;; For automatic roles, trigger automatic execution  
+                     (:mayor :craftsman)
+                     (handle-automatic-role-execution current-game)
+
+                     ;; For other roles, do nothing
                      nil))))))
          500)))))
 
