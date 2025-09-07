@@ -519,6 +519,64 @@ h2 {
     padding: 10px;
 }
 
+/* Game Log */
+.game-log {
+    background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+    border: 2px solid #6c757d;
+    border-radius: 10px;
+    padding: 15px;
+    margin-top: 20px;
+    max-height: 400px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.game-log h3 {
+    margin-top: 0;
+    color: #495057;
+    font-size: 1.3em;
+    border-bottom: 2px solid #6c757d;
+    padding-bottom: 8px;
+}
+
+.log-entries {
+    max-height: 320px;
+    overflow-y: auto;
+    margin-top: 15px;
+}
+
+.log-entry {
+    padding: 8px;
+    margin: 5px 0;
+    background: white;
+    border-radius: 6px;
+    border-left: 3px solid #28a745;
+    font-size: 0.9em;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+.log-entry .timestamp {
+    color: #6c757d;
+    font-size: 0.8em;
+    margin-right: 8px;
+}
+
+.log-entry .player {
+    font-weight: bold;
+    color: #495057;
+    margin-right: 5px;
+}
+
+.log-entry .message {
+    color: #333;
+}
+
+.log-empty {
+    text-align: center;
+    color: #6c757d;
+    font-style: italic;
+    padding: 20px;
+}
+
 /* Responsive design */
 @media (max-width: 1200px) {
     .main-content {

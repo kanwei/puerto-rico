@@ -10,8 +10,26 @@
                                    :loading false
                                    :error nil}))
 
+;; Game log state
+(defonce game-log (reagent/atom []))
+
+(defn add-log-entry [message & [player-name]]
+  (let [timestamp (.toLocaleTimeString (js/Date.))
+        entry {:timestamp timestamp
+               :message message
+               :player player-name}]
+    (swap! game-log conj entry)
+    ;; Keep only last 20 entries to prevent memory issues
+    (when (> (count @game-log) 20)
+      (swap! game-log #(vec (take-last 20 %))))))
+
+(defn clear-log []
+  (reset! game-log []))
+
 ;; Initialize a real game with players
 (defn create-new-game []
+  (clear-log)
+  (add-log-entry "🎮 New game started with 3 players")
   (let [players [(state/new-player 1 "Alice (Human)")
                  (assoc (state/new-player 2 "Bob (AI)") :is-ai true :difficulty :medium)
                  (assoc (state/new-player 3 "Carol (AI)") :is-ai true :difficulty :hard)]]
@@ -33,6 +51,9 @@
         player-id (:id current-player-data)]
     (when current-game
       (let [new-game-state (rules/select-role current-game player-id role)]
+        (add-log-entry (str "🎭 Selected " (name role) " role") (:name current-player-data))
+        (when (= role :prospector)
+          (add-log-entry (str "💰 Gained 1 doubloon from Prospector") (:name current-player-data)))
         (swap! game-state assoc :game-state new-game-state)
         (js/console.log "Role selected:" role "New game state:" new-game-state)))))
 
@@ -45,6 +66,7 @@
       (let [new-game-state (-> current-game
                                (rules/execute-role :settler player-id plantation-type)
                                (rules/advance-role-execution))]
+        (add-log-entry (str "🌱 Took " (name plantation-type) " plantation") (:name executor-player))
         (swap! game-state assoc :game-state new-game-state)
         (js/console.log "Plantation chosen:" plantation-type "New game state:" new-game-state)))))
 
@@ -53,9 +75,11 @@
         executor-player (current-role-executor current-game)
         player-id (:id executor-player)]
     (when current-game
-      (let [new-game-state (-> current-game
+      (let [building-info (get state/buildings building-key)
+            new-game-state (-> current-game
                                (rules/execute-role :builder player-id building-key)
                                (rules/advance-role-execution))]
+        (add-log-entry (str "🏗️ Built " (name building-key) " for $" (:cost building-info)) (:name executor-player))
         (swap! game-state assoc :game-state new-game-state)
         (js/console.log "Building chosen:" building-key "New game state:" new-game-state)))))
 
@@ -66,7 +90,12 @@
     (when current-game
       (let [new-game-state (-> current-game
                                (rules/execute-role role player-id good-type)
-                               (rules/advance-role-execution))]
+                               (rules/advance-role-execution))
+            action-text (case role
+                          :trader "💰 Sold"
+                          :captain "🚢 Shipped"
+                          "Used")]
+        (add-log-entry (str action-text " " (name good-type)) (:name executor-player))
         (swap! game-state assoc :game-state new-game-state)
         (js/console.log "Good chosen:" good-type "for role:" role "New game state:" new-game-state)))))
 
@@ -133,6 +162,11 @@
             new-game-state (-> current-game
                                (rules/execute-role selected-role player-id)
                                (rules/advance-role-execution))]
+        (let [action-text (case selected-role
+                            :mayor "👥 Got colonists"
+                            :craftsman "⚙️ Produced goods"
+                            "Executed")]
+          (add-log-entry action-text (:name executor-player)))
         (swap! game-state assoc :game-state new-game-state)
         (js/console.log "Auto-executed role" selected-role "for player" (:name executor-player))))))
 
@@ -316,6 +350,20 @@
                        (str (name (:good ship)) " " (:amount ship) "/" (:capacity ship))
                        (str "Empty (Capacity: " (:capacity ship) ")"))]])]]])
 
+(defn game-log-ui []
+  [:div.game-log
+   [:h3 "📜 Game Log"]
+   [:div.log-entries
+    (if (seq @game-log)
+      (for [[idx entry] (map-indexed vector (reverse @game-log))]
+        ^{:key idx}
+        [:div.log-entry
+         [:span.timestamp (:timestamp entry)]
+         (when (:player entry)
+           [:span.player (:player entry) ":"])
+         [:span.message (:message entry)]])
+      [:div.log-empty "No events yet..."])]])
+
 (defn game-board []
   (let [game-data (:game-state @game-state)]
     (if game-data
@@ -355,7 +403,9 @@
             [:div.players-grid
              (for [[idx player] (map-indexed vector (:players game-data))]
                ^{:key (:id player)}
-               [player-board player (= idx (:current-player-idx game-data))])]]]]])
+               [player-board player (= idx (:current-player-idx game-data))])]]
+
+           [game-log-ui]]]])
       [:div.no-game
        [:h1 "🏝️ Puerto Rico"]
        [:p "Welcome to the Puerto Rico board game!"]
