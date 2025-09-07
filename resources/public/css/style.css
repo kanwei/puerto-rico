@@ -604,6 +604,85 @@ body {
     margin: 0 0 10px 0;
 }
 
+/* Game Over Screen */
+.game-over-screen {
+    text-align: center;
+    padding: 50px 20px;
+    background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+    border: 3px solid #28a745;
+    border-radius: 12px;
+    margin: 20px;
+}
+
+.game-over-header h1 {
+    color: #28a745;
+    font-size: 3em;
+    margin: 0 0 20px 0;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+}
+
+.game-over-header h2 {
+    color: #2c5530;
+    font-size: 1.8em;
+    margin: 0 0 30px 0;
+}
+
+.final-scores {
+    margin: 30px 0;
+}
+
+.final-scores h3 {
+    color: #2c5530;
+    font-size: 1.4em;
+    margin: 0 0 15px 0;
+}
+
+.player-final-score {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 20px;
+    margin: 5px auto;
+    max-width: 300px;
+    background: white;
+    border-radius: 6px;
+    border: 2px solid #dee2e6;
+}
+
+.player-final-score.winner {
+    border-color: #28a745;
+    background: linear-gradient(135deg, #d4edda, #c3e6cb);
+    font-weight: bold;
+}
+
+.player-name {
+    color: #2c5530;
+}
+
+.player-score {
+    color: #495057;
+    font-weight: bold;
+}
+
+.game-over-actions {
+    margin-top: 30px;
+}
+
+.game-over-actions button {
+    background: linear-gradient(135deg, #28a745, #20c997);
+    color: white;
+    border: none;
+    padding: 15px 30px;
+    font-size: 1.2em;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.game-over-actions button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
+}
+
 /* No game state */
 .no-game {
     text-align: center;

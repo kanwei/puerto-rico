@@ -642,6 +642,24 @@
          [:span.message (:message entry)]])
       [:div.log-empty "No events yet..."])]])
 
+(defn game-over-screen [game-data]
+  [:div.game-over-screen
+   [:div.game-over-header
+    [:h1 "🏆 Game Over"]
+    [:h2 "Winner: " (:name (:winner game-data))]]
+   [:div.final-scores
+    [:h3 "Final Scores:"]
+    (for [player (:players game-data)]
+      ^{:key (:id player)}
+      [:div.player-final-score {:class (when (= player (:winner game-data)) "winner")}
+       [:span.player-name (:name player)]
+       [:span.player-score (:final-score player) " VP"]])]
+   [:div.game-over-actions
+    [:button {:on-click #(swap! game-state assoc :game-state (create-new-game))}
+     "🎮 Start New Game"]]])
+
+(defn game-board [])
+
 (defn game-board []
   (let [game-data (game-state-watcher)]
     (if game-data
