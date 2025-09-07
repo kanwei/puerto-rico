@@ -281,15 +281,22 @@
 ;; Victory condition checks
 (defn check-victory-conditions [game-state]
   (let [players (:players game-state)
-        has-12-buildings (some #(>= (count (:buildings %)) 12) players)
+        has-full-city (some (fn [player]
+                              (let [regular-buildings (filter #(not= (get-in buildings [(:type %) :type]) :large)
+                                                              (:buildings player))
+                                    large-buildings (filter #(= (get-in buildings [(:type %) :type]) :large)
+                                                            (:buildings player))
+                                    city-slots-used (+ (count regular-buildings) (* 2 (count large-buildings)))]
+                                (>= city-slots-used 12)))
+                            players)
         colonists-exhausted (<= (:colonist-supply game-state) 0)
         vp-exhausted (<= (:victory-point-supply game-state) 0)]
-    (when (or has-12-buildings colonists-exhausted vp-exhausted)
+    (when (or has-full-city colonists-exhausted vp-exhausted)
       (println "GAME END TRIGGERED:"
-               (cond has-12-buildings "12 buildings reached"
+               (cond has-full-city "city filled (12 slots used)"
                      colonists-exhausted "colonists exhausted"
                      vp-exhausted "victory points exhausted")))
-    (or has-12-buildings colonists-exhausted vp-exhausted)))
+    (or has-full-city colonists-exhausted vp-exhausted)))
 
 (defn calculate-victory-points-breakdown [player]
   "Calculate victory points with detailed breakdown for game over screen"

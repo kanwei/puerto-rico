@@ -459,8 +459,8 @@
 
 (defn find-ship-for-good [ships good amount]
   "Find appropriate ship for shipping goods according to Puerto Rico rules:
-   1. If any ship already contains ANY good and has space, that good MUST go there (if it matches)
-   2. Only if no partially filled ships can accept the good can you use an empty ship
+   1. If any ship already contains the same good type, you MUST use it (regardless of capacity)
+   2. Only if no partially filled ships contain this good type can you use an empty ship
    3. You cannot choose between multiple valid ships - the rules determine which ship to use"
   (let [;; Separate ships into partially filled and empty
         partially-filled-ships (->> ships
@@ -472,11 +472,11 @@
                          (filter (fn [[idx ship]]
                                    (nil? (:good ship)))))
 
-        ;; Check if any partially filled ship can accept this good type
+        ;; Check if any partially filled ship contains this good type
+        ;; NOTE: We don't check capacity here - you MUST use existing ship regardless
         compatible-filled-ship (->> partially-filled-ships
                                     (filter (fn [[idx ship]]
-                                              (and (= (:good ship) good)
-                                                   (>= (- (:capacity ship) (:amount ship)) amount))))
+                                              (= (:good ship) good)))
                                     (first))
 
         ;; Find the smallest empty ship that can hold the goods
@@ -491,7 +491,7 @@
       ;; Rule 1: If there's a partially filled ship with the same good type, MUST use it
       compatible-filled-ship compatible-filled-ship
 
-      ;; Rule 2: Only if no partially filled ship works, can use empty ship
+      ;; Rule 2: Only if no partially filled ship has this good type, can use empty ship
       (and (nil? compatible-filled-ship) compatible-empty-ship)
       compatible-empty-ship
 
@@ -641,17 +641,17 @@
     game-state))
 
 (defn calculate-warehouse-storage [player]
-  "Calculate how many goods types a player can store based on warehouses"
+  "Calculate how many goods TYPES a player can store based on warehouses"
   (let [has-small-warehouse (has-occupied-building? player :small-warehouse)
         has-large-warehouse (has-occupied-building? player :large-warehouse)]
     (cond
-      ;; Both warehouses: can store 3 types (1 base + 1 small + 2 large, but note says 3 total)
-      (and has-small-warehouse has-large-warehouse) 3
-      ;; Large warehouse only: can store 3 types (1 base + 2 large)
+      ;; Both warehouses: 1 base + 1 small + 2 large = 4 types total
+      (and has-small-warehouse has-large-warehouse) 4
+      ;; Large warehouse only: 1 base + 2 large = 3 types total  
       has-large-warehouse 3
-      ;; Small warehouse only: can store 2 types (1 base + 1 small)
+      ;; Small warehouse only: 1 base + 1 small = 2 types total
       has-small-warehouse 2
-      ;; No warehouses: can store 1 type (base storage)
+      ;; No warehouses: 1 type total (but only 1 good of that type)
       :else 1)))
 
 (defn apply-storage-rules [game-state]
@@ -662,23 +662,43 @@
                     (let [current-goods (:goods player)
                           goods-with-amounts (filter #(pos? (second %)) current-goods)
                           goods-types-count (count goods-with-amounts)
-                          max-storable-types (calculate-warehouse-storage player)]
-                      (if (<= goods-types-count max-storable-types)
-                        ;; Player can store all their goods
-                        player
-                        ;; Player must choose which goods to keep
-                        ;; For now, keep the most valuable goods (coffee > tobacco > sugar > indigo > corn)
-                        ;; TODO: This should be a player choice in the UI
+                          max-storable-types (calculate-warehouse-storage player)
+                          has-no-warehouses (and (not (has-occupied-building? player :small-warehouse))
+                                                 (not (has-occupied-building? player :large-warehouse)))]
+                      (cond
+                        ;; Player can store all their goods types
+                        (<= goods-types-count max-storable-types)
+                        (if (and has-no-warehouses (> goods-types-count 1))
+                          ;; Special case: no warehouses but multiple types - keep only 1 good total
+                          (let [goods-priority {:coffee 5 :tobacco 4 :sugar 3 :indigo 2 :corn 1}
+                                best-good-type (first (sort-by #(get goods-priority % 0) >
+                                                               (map first goods-with-amounts)))
+                                new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
+                                                 {best-good-type 1})]
+                            (assoc player :goods new-goods))
+                          ;; With warehouses or only one type: keep all goods of allowed types
+                          (if (and has-no-warehouses (= goods-types-count 1))
+                            ;; No warehouses, one type: keep only 1 good of that type
+                            (let [[good-type _] (first goods-with-amounts)
+                                  new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
+                                                   {good-type 1})]
+                              (assoc player :goods new-goods))
+                            ;; Has warehouses: keep all goods of the types
+                            player))
+
+                        ;; Player has too many types - must choose which types to keep  
+                        :else
                         (let [goods-priority {:coffee 5 :tobacco 4 :sugar 3 :indigo 2 :corn 1}
                               sorted-goods (sort-by #(get goods-priority (first %) 0) > goods-with-amounts)
                               goods-to-keep (take max-storable-types sorted-goods)
-                              goods-to-discard (drop max-storable-types sorted-goods)
-                              ;; Calculate new goods amounts (keep all of the storable types)
-                              new-goods (reduce (fn [goods [good-type amount]]
-                                                  (assoc goods good-type amount))
-                                                {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
-                                                goods-to-keep)]
-                          ;; Update player's goods (goods are returned to supply automatically)
+                              ;; For no warehouses, keep only 1 good of the best type
+                              final-goods (if has-no-warehouses
+                                            (let [[best-type _] (first goods-to-keep)]
+                                              {best-type 1})
+                                            ;; With warehouses, keep all goods of the selected types
+                                            (into {} goods-to-keep))
+                              new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
+                                               final-goods)]
                           (assoc player :goods new-goods)))))
                   players))))
 
