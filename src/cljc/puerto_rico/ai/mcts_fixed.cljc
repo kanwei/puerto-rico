@@ -3,32 +3,115 @@
   (:require [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]))
 
+(defn evaluate-role-utility
+  "Calculate utility score for each role based on player's current situation"
+  [game-state player-id role]
+  (let [player (state/player-by-id game-state player-id)
+        total-goods (apply + (vals (:goods player)))
+        money (:money player)
+        buildings (:buildings player)
+        plantations (:plantations player)
+        empty-buildings (count (filter #(zero? (:colonists %)) buildings))
+        empty-plantations (count (filter #(zero? (:colonists %)) plantations))
+        total-empty-spots (+ empty-buildings empty-plantations)
+        colonist-ship (:colonist-ship game-state)
+        trading-house (:trading-house game-state)
+        available-ships (->> (:ships game-state)
+                             (filter #(< (:amount %) (:capacity %)))
+                             count)]
+    (case role
+      :captain
+      (if (zero? total-goods)
+        -100 ; Never pick captain with no goods
+        (+ 20 (* total-goods 10))) ; Higher score with more goods
+
+      :trader
+      (if (zero? total-goods)
+        -100 ; Never pick trader with no goods  
+        (if (>= (count trading-house) 4)
+          -50 ; Avoid if trading house is full
+          (+ 15 (* total-goods 8))))
+
+      :builder
+      (if (< money 2)
+        -80 ; Avoid builder if very poor
+        (+ 10 (* money 3) ; Score based on money available
+           (if (>= (count buildings) 10) 15 0))) ; Bonus if close to 12 buildings
+
+      :mayor
+      (if (zero? total-empty-spots)
+        -60 ; Don't pick mayor if no empty spots
+        (+ 12 (* total-empty-spots 5) ; More empty spots = higher score
+           (max 0 (- colonist-ship 2)))) ; Bonus if many colonists available
+
+      :craftsman
+      (let [production-potential (->> plantations
+                                      (filter #(pos? (:colonists %)))
+                                      count)]
+        (if (zero? production-potential)
+          -70 ; Avoid if can't produce anything
+          (+ 8 (* production-potential 6))))
+
+      :settler
+      (if (>= (count plantations) 12)
+        -90 ; Avoid if island is full
+        (+ 5 (if (< (count plantations) 8) 8 2))) ; Bonus early game
+
+      :prospector
+      (if (< money 5)
+        8 ; Good when poor
+        2) ; Less valuable when rich
+
+      0))) ; Default score
+
+(defn smart-role-selection
+  "Filter available roles using heuristics before MCTS"
+  [game-state player-id available-roles]
+  (let [role-scores (map (fn [role]
+                           [role (evaluate-role-utility game-state player-id role)])
+                         available-roles)
+        ;; Sort by score and take top 60% of roles
+        sorted-roles (sort-by second > role-scores)
+        num-to-keep (max 1 (int (* 0.6 (count available-roles))))
+        good-roles (take num-to-keep sorted-roles)]
+    (map first good-roles)))
+
 ;; Simplified MCTS with mutable statistics
 (defn get-possible-moves [game-state]
-  "Generate all possible moves for the current game state"
+  "Generate all possible moves for the current game state, with smart filtering for role selection"
   (case (:phase game-state)
     :role-selection
-    (vec (:available-roles game-state))
+    (let [available-roles (vec (:available-roles game-state))
+          current-player-id (:current-player-idx game-state)]
+      ;; Use heuristics to filter roles for AI players
+      (if (and current-player-id
+               (get-in game-state [:players current-player-id :is-ai]))
+        (smart-role-selection game-state current-player-id available-roles)
+        available-roles))
 
     :role-execution
     (let [role (:selected-role game-state)
           current-player (state/current-player game-state)]
       (case role
         :settler
-        (vec (keys (filter #(pos? (val %)) (:plantation-supply game-state))))
+        (let [available-plantations (concat (:face-up-plantations game-state)
+                                            (if (pos? (:quarry-supply game-state)) [:quarry] []))]
+          (vec (distinct available-plantations)))
 
         :builder
-        (vec (keys (filter (fn [[building info]]
-                             (rules/can-build-building? current-player building info))
-                           state/buildings)))
+        (vec (keys (filter (fn [[building-key count]]
+                             (and (pos? count)
+                                  (let [building-info (get state/buildings building-key)]
+                                    (rules/can-build-building? current-player building-key building-info))))
+                           (:building-supply game-state))))
 
         :trader
         (vec (filter #(rules/can-trade-good? game-state current-player %)
-                     state/goods))
+                     (keys (:goods-supply game-state))))
 
         :captain
         (vec (filter #(pos? (get-in current-player [:goods %] 0))
-                     state/goods))
+                     (keys (:goods-supply game-state))))
 
         ;; For roles with no choices
         [:execute]))
