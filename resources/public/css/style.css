@@ -706,6 +706,51 @@ body {
     transition: all 0.3s ease;
 }
 
+/* Game Mode Selection */
+.game-mode-selection {
+    display: flex;
+    gap: 30px;
+    justify-content: center;
+    margin-top: 30px;
+    flex-wrap: wrap;
+}
+
+.game-mode-button {
+    background: linear-gradient(135deg, #4a7c59, #2c5530);
+    color: white;
+    border: none;
+    padding: 20px 30px;
+    font-size: 1.3em;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    min-width: 200px;
+    position: relative;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.game-mode-button:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+    background: linear-gradient(135deg, #5a8c69, #3c6540);
+}
+
+.game-mode-button .button-description {
+    font-size: 0.8em;
+    margin: 8px 0 0 0;
+    opacity: 0.9;
+    color: #e8f5e8;
+}
+
+.game-over-actions .game-mode-button {
+    background: linear-gradient(135deg, #28a745, #20c997);
+    margin: 10px;
+}
+
+.game-over-actions .game-mode-button:hover {
+    background: linear-gradient(135deg, #34ce57, #20c997);
+}
+
 /* Responsive */
 @media (max-width: 1200px) {
     .main-area {

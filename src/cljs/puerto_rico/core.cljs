@@ -41,10 +41,18 @@
 ;; Initialize a real game with players
 (defn create-new-game []
   (clear-log)
-  (add-log-entry "🎮 New game started with 3 players")
   (let [players [(state/new-player 1 "Alice (Human)")
-                 (assoc (state/new-player 2 "Bob (AI)") :is-ai true :difficulty :medium)
-                 (assoc (state/new-player 3 "Carol (AI)") :is-ai true :difficulty :hard)]]
+                 (assoc (state/new-player 2 "Bob (AI)") :is-ai true)
+                 (assoc (state/new-player 3 "Carol (AI)") :is-ai true)]]
+    (add-log-entry "New game started with 3 players")
+    (state/new-game-state players)))
+
+(defn create-ai-only-game []
+  (clear-log)
+  (let [players [(assoc (state/new-player 1 "Alice (AI)") :is-ai true)
+                 (assoc (state/new-player 2 "Bob (AI)") :is-ai true)
+                 (assoc (state/new-player 3 "Carol (AI)") :is-ai true)]]
+    (add-log-entry "AI-only game started - watch the AIs compete!")
     (state/new-game-state players)))
 
 ;; Helper functions
@@ -655,8 +663,12 @@
        [:span.player-name (:name player)]
        [:span.player-score (:final-score player) " VP"]])]
    [:div.game-over-actions
-    [:button {:on-click #(swap! game-state assoc :game-state (create-new-game))}
-     "🎮 Start New Game"]]])
+    [:button.game-mode-button {:on-click #(swap! game-state assoc :game-state (create-new-game))}
+     "👤 Play Again"
+     [:p.button-description "Human vs AI"]]
+    [:button.game-mode-button {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
+     "🤖 Watch AI Battle"
+     [:p.button-description "AI vs AI"]]]])
 
 (defn game-board [])
 
@@ -726,8 +738,13 @@
       [:div.no-game
        [:h1 "🏝️ Puerto Rico"]
        [:p "Welcome to the Puerto Rico board game!"]
-       [:button {:on-click #(swap! game-state assoc :game-state (create-new-game))}
-        "🎮 Start New Game"]])))
+       [:div.game-mode-selection
+        [:button.game-mode-button {:on-click #(swap! game-state assoc :game-state (create-new-game))}
+         "👤 Play as Human"
+         [:p.button-description "Play against AI opponents"]]
+        [:button.game-mode-button {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
+         "🤖 Watch AI Battle"
+         [:p.button-description "Watch 3 AI players compete"]]]])))
 
 (defn main-panel []
   [game-board])
