@@ -293,9 +293,12 @@
 
 (defn calculate-victory-points-breakdown [player]
   "Calculate victory points with detailed breakdown for game over screen"
-  (let [building-vps (reduce + (map #(get-in buildings [% :vp] 0) (:buildings player)))
-        goods-vps (quot (reduce + (vals (:goods player))) 1)
+  (let [building-vps (reduce + (map #(get-in buildings [(:type %) :vp] 0) (:buildings player)))
         shipping-vps (:victory-points player)
+
+        ;; Calculate tiebreaker value (money + goods)
+        total-goods (reduce + (vals (:goods player)))
+        tiebreaker-value (+ (:money player) total-goods)
 
         ;; Large building bonuses breakdown
         guild-hall-bonus (if (has-occupied-building? player :guild-hall)
@@ -323,11 +326,11 @@
 
         large-building-bonuses (+ guild-hall-bonus residence-bonus fortress-bonus
                                   customs-house-bonus city-hall-bonus)
-        total-vps (+ shipping-vps building-vps goods-vps large-building-bonuses)]
+        total-vps (+ shipping-vps building-vps large-building-bonuses)]
 
     {:shipping-vps shipping-vps
      :building-vps building-vps
-     :goods-vps goods-vps
+     :tiebreaker-value tiebreaker-value
      :large-building-bonuses large-building-bonuses
      :guild-hall-bonus guild-hall-bonus
      :residence-bonus residence-bonus
@@ -338,7 +341,6 @@
 
 ;; Calculate final victory points
 (defn calculate-victory-points [player]
-  (let [building-vps (reduce + (map #(get-in buildings [% :vp] 0) (:buildings player)))
-        goods-vps (quot (reduce + (vals (:goods player))) 1)
+  (let [building-vps (reduce + (map #(get-in buildings [(:type %) :vp] 0) (:buildings player)))
         large-building-bonuses (calculate-large-building-bonuses player)]
-    (+ (:victory-points player) building-vps goods-vps large-building-bonuses)))
+    (+ (:victory-points player) building-vps large-building-bonuses)))

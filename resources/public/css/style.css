@@ -831,7 +831,68 @@ body {
     background: linear-gradient(135deg, #34ce57, #20c997);
 }
 
-/* Responsive - IMPROVED */
+/* Compact Game Over VP Breakdown */
+.vp-breakdown-compact {
+    font-size: 0.9em;
+}
+
+.vp-summary {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+
+.vp-category-compact {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 4px 8px;
+    border-radius: 6px;
+    min-width: 70px;
+}
+
+.vp-icon {
+    font-size: 1em;
+}
+
+.vp-label {
+    color: #2c3e50;
+    font-size: 0.85em;
+    font-weight: 500;
+}
+
+.vp-value {
+    color: #e74c3c;
+    font-weight: bold;
+    font-size: 1em;
+    margin-left: auto;
+}
+
+.vp-total-compact {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.2);
+    padding: 6px 10px;
+    border-radius: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    margin-top: 8px;
+}
+
+.vp-total-label {
+    color: #2c3e50;
+    font-weight: 500;
+}
+
+.vp-total-value {
+    color: #f39c12;
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+
 @media (max-width: 1200px) {
     .main-area {
         flex-direction: column;

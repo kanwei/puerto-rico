@@ -692,16 +692,20 @@
    [:div.vp-summary
     [:div.vp-category-compact
      [:span.vp-icon "🚢"]
+     [:span.vp-label "Ship:"]
      [:span.vp-value (:shipping-vps player-breakdown)]]
     [:div.vp-category-compact
      [:span.vp-icon "🏗️"]
+     [:span.vp-label "Build:"]
      [:span.vp-value (:building-vps player-breakdown)]]
     [:div.vp-category-compact
      [:span.vp-icon "📦"]
+     [:span.vp-label "Goods:"]
      [:span.vp-value (:goods-vps player-breakdown)]]
     (when (pos? (:large-building-bonuses player-breakdown))
       [:div.vp-category-compact
        [:span.vp-icon "🏛️"]
+       [:span.vp-label "Bonus:"]
        [:span.vp-value (:large-building-bonuses player-breakdown)]])]
    [:div.vp-total-compact
     [:span.vp-total-label "Total: "]

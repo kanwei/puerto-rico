@@ -3,7 +3,7 @@
   (:require [puerto-rico.game.state :as state]))
 
 ;; Forward declarations
-(declare end-role-execution execute-role)
+(declare end-role-execution execute-role has-occupied-building?)
 
 ;; Role execution functions
 
@@ -497,6 +497,41 @@
                   game)))
             game-state
             (range (count ships)))))
+
+(defn can-ship-goods? [game-state player]
+  "Check if player has any goods that can actually be shipped"
+  (let [goods (:goods player)
+        ships (:ships game-state)]
+    (some (fn [[good-type amount]]
+            (and (pos? amount)
+                 (find-ship-for-good ships good-type amount)))
+          goods)))
+
+(defn can-trade-any-goods? [game-state player]
+  "Check if player has any goods that can be traded"
+  (let [goods (:goods player)]
+    (some (fn [[good-type amount]]
+            (and (pos? amount)
+                 (can-trade-good? game-state player good-type)))
+          goods)))
+
+(defn can-produce-goods? [game-state player]
+  "Check if player can actually produce any goods"
+  (let [plantations (:plantations player)
+        buildings (:buildings player)
+        occupied-plantations (filter #(pos? (:colonists %)) plantations)
+        occupied-production-buildings (filter #(and (pos? (:colonists %))
+                                                    (let [building-info (get state/buildings (:type %))]
+                                                      (= (:type building-info) :production))) buildings)]
+    (or
+      ;; Can produce corn (just need occupied corn plantations)
+     (some #(= (:type %) :corn) occupied-plantations)
+      ;; Can produce other goods (need both plantation and production building)
+     (some (fn [building]
+             (let [building-info (get state/buildings (:type building))
+                   good-type (:good building-info)]
+               (some #(= (:type %) good-type) occupied-plantations)))
+           occupied-production-buildings))))
 
 (defn execute-captain [game-state player-id good-choice]
   "Execute the captain role - ship goods"

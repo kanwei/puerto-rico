@@ -21,16 +21,14 @@
                              count)]
     (case role
       :captain
-      (if (zero? total-goods)
-        -100 ; Never pick captain with no goods
+      (if (not (rules/can-ship-goods? game-state player))
+        -200 ; Heavily penalize captain if no goods can be shipped
         (+ 20 (* total-goods 10))) ; Higher score with more goods
 
       :trader
-      (if (zero? total-goods)
-        -100 ; Never pick trader with no goods  
-        (if (>= (count trading-house) 4)
-          -50 ; Avoid if trading house is full
-          (+ 15 (* total-goods 8))))
+      (if (not (rules/can-trade-any-goods? game-state player))
+        -150 ; Heavily penalize trader if no goods can be traded
+        (+ 15 (* total-goods 8)))
 
       :builder
       (if (< money 2)
@@ -45,11 +43,11 @@
            (max 0 (- colonist-ship 2)))) ; Bonus if many colonists available
 
       :craftsman
-      (let [production-potential (->> plantations
-                                      (filter #(pos? (:colonists %)))
-                                      count)]
-        (if (zero? production-potential)
-          -70 ; Avoid if can't produce anything
+      (if (not (rules/can-produce-goods? game-state player))
+        -120 ; Heavily penalize craftsman if can't produce anything
+        (let [production-potential (->> plantations
+                                        (filter #(pos? (:colonists %)))
+                                        count)]
           (+ 8 (* production-potential 6))))
 
       :settler
