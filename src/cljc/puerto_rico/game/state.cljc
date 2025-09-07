@@ -280,14 +280,16 @@
 
 ;; Victory condition checks
 (defn check-victory-conditions [game-state]
-  (let [players (:players game-state)]
-    (or
-      ;; Check if any player has 12 building spaces filled
-     (some #(>= (count (:buildings %)) 12) players)
-      ;; Check if colonist supply is exhausted  
-     (<= (:colonist-supply game-state) 0)
-      ;; Check if victory point supply is exhausted
-     (<= (:victory-point-supply game-state) 0))))
+  (let [players (:players game-state)
+        has-12-buildings (some #(>= (count (:buildings %)) 12) players)
+        colonists-exhausted (<= (:colonist-supply game-state) 0)
+        vp-exhausted (<= (:victory-point-supply game-state) 0)]
+    (when (or has-12-buildings colonists-exhausted vp-exhausted)
+      (println "GAME END TRIGGERED:"
+               (cond has-12-buildings "12 buildings reached"
+                     colonists-exhausted "colonists exhausted"
+                     vp-exhausted "victory points exhausted")))
+    (or has-12-buildings colonists-exhausted vp-exhausted)))
 
 ;; Calculate final victory points
 (defn calculate-victory-points [player]

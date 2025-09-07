@@ -674,7 +674,13 @@
 
 (defn game-board []
   (let [game-data (game-state-watcher)]
-    (if game-data
+    (cond
+      ;; Check for game over first
+      (and game-data (:game-over game-data))
+      [game-over-screen game-data]
+
+      ;; Normal game display
+      game-data
       (let [current-player-data (current-player game-data)]
         [:div.game-board-compact
          ;; Compact header bar
@@ -682,9 +688,14 @@
           [:h2 "🏝️ Puerto Rico"]
           [:div.game-status
            [:span.status-item "📅 Round " (:round game-data)]
-           [:span.status-item "⚡ " (name (:phase game-data))]
+           [:span.status-item
+            (if (:game-over game-data)
+              "🏆 game-over"
+              (str "⚡ " (name (:phase game-data))))]
            [:span.status-item "👑 " (:name (state/current-governor game-data))]
-           [:span.status-item "👤 " (:name current-player-data)]]]
+           [:span.status-item "👤 " (if current-player-data
+                                      (:name current-player-data)
+                                      "None")]]]
 
          ;; Players in horizontal row (compact)
          [:div.players-row
@@ -707,7 +718,7 @@
                              ;; Default
                              :else nil)]
              (cond
-;; Auto-execute AI turns with visual feedback
+               ;; Auto-execute AI turns with visual feedback
                ai-player
                (let [ai-display @ai-action-display]
                  (if (:show ai-display)
@@ -735,6 +746,9 @@
           [:div.sidebar
            [common-area game-data]
            [game-log-ui]]]])
+
+      ;; No game started
+      :else
       [:div.no-game
        [:h1 "🏝️ Puerto Rico"]
        [:p "Welcome to the Puerto Rico board game!"]
