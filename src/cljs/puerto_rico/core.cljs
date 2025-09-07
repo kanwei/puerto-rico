@@ -318,106 +318,80 @@
 
 (defn player-board [player current?]
   [:div.player-board {:class (when current? "current-player")}
-   [:h3 (str (:name player) (when current? " ⭐"))]
-   [:div.player-stats
-    [:p "💰 Money: $" (:money player)]
-    [:p "🏆 Victory Points: " (:victory-points player)]
-    [:p "🏘️ San Juan Colonists: " (get player :san-juan-colonists 0)]
-    (when (> (get player :colonists-in-hand 0) 0)
-      [:p "👥 Colonists in Hand: " (get player :colonists-in-hand 0)])
-    [:div.goods
-     [:h4 "📦 Goods:"]
-     (if (seq (:goods player))
-       (for [[good amount] (:goods player)]
-         ^{:key good} [:span.good (str (name good) ": " amount " ")])
-       [:span.empty "None"])]
-    [:div.buildings
-     [:h4 "🏢 Buildings:"]
-     (if (seq (:buildings player))
+   [:div.player-header
+    [:h4 (str (:name player) (when current? " ⭐"))]
+    [:div.player-quick-stats
+     [:span.money "💰$" (:money player)]
+     [:span.vp "🏆" (:victory-points player)]
+     [:span.san-juan "🏘️" (get player :san-juan-colonists 0)]]]
+
+   [:div.player-assets
+    ;; Buildings (more compact)
+    (when (seq (:buildings player))
+      [:div.buildings-compact
+       [:strong "🏢 "]
        (for [[idx building] (map-indexed vector (:buildings player))]
-         ^{:key idx} [:span.building
-                      (str (if (map? building)
-                             (name (:type building))
-                             (name building))
-                           " [" (if (map? building) (:colonists building 0) 0) "👥] ")])
-       [:span.empty "None"])]
-    [:div.plantations
-     [:h4 "🌱 Plantations:"]
-     (if (seq (:plantations player))
+         ^{:key idx} [:span.building-chip
+                      (str (if (map? building) (name (:type building)) (name building))
+                           "[" (if (map? building) (:colonists building 0) 0) "]")])])
+
+    ;; Plantations (more compact)
+    (when (seq (:plantations player))
+      [:div.plantations-compact
+       [:strong "🌱 "]
        (for [[idx plantation] (map-indexed vector (:plantations player))]
-         ^{:key idx} [:span.plantation
-                      (str (if (map? plantation)
-                             (name (:type plantation))
-                             (name plantation))
-                           " [" (if (map? plantation) (:colonists plantation 0) 0) "👥] ")])
-       [:span.empty "None"])]]])
+         ^{:key idx} [:span.plantation-chip
+                      (str (if (map? plantation) (name (:type plantation)) (name plantation))
+                           "[" (if (map? plantation) (:colonists plantation 0) 0) "]")])])
+
+    ;; Goods (inline)
+    (let [goods-with-amounts (filter #(> (second %) 0) (:goods player))]
+      (when (seq goods-with-amounts)
+        [:div.goods-compact
+         [:strong "📦 "]
+         (for [[good amount] goods-with-amounts]
+           ^{:key good} [:span.good-chip (str (name good) ":" amount)])]))]])
 
 (defn common-area [game-data]
   [:div.common-area
-   [:h2 "🏢 Common Area"]
+   [:h3 "🏢 Game State"]
 
-   ;; Victory Points Supply
-   [:div.supply-section
-    [:h3 "🏆 Victory Points Supply"]
-    [:p "Remaining: " (:victory-point-supply game-data)]]
+   ;; Top row - key supplies
+   [:div.supply-row
+    [:div.supply-item
+     [:strong "🏆 VP: "] (:victory-point-supply game-data)]
+    [:div.supply-item
+     [:strong "👥 Colonists: "] (:colonist-supply game-data)]
+    [:div.supply-item
+     [:strong "🚢 Ship: "] (get game-data :colonist-ship 0)]]
 
-;; Colonist Supply
+   ;; Plantation supply (horizontal)
    [:div.supply-section
-    [:h3 "👥 Colonist Supply"]
-    [:p "Remaining: " (:colonist-supply game-data)]]
+    [:strong "🌱 Plantations: "]
+    (for [[tile-type count] (sort-by first (:plantation-supply game-data))]
+      ^{:key tile-type} [:span.supply-chip (str (name tile-type) ":" count)])]
 
-   ;; Colonist Ship (for Mayor role)
+   ;; Goods supply (horizontal) 
    [:div.supply-section
-    [:h3 "🚢 Colonist Ship"]
-    [:p "On Ship: " (get game-data :colonist-ship 0) " colonists"]]
+    [:strong "📦 Goods: "]
+    (for [[good count] (sort-by first (:goods-supply game-data))]
+      ^{:key good} [:span.supply-chip (str (name good) ":" count)])]
 
-   ;; Plantation Tiles
-   [:div.supply-section
-    [:h3 "🌱 Plantation Tiles"]
-    [:div.plantation-tiles
-     (for [[tile-type count] (:plantation-supply game-data)]
-       ^{:key tile-type} [:div.tile-count
-                          [:span.tile-name (name tile-type)]
-                          [:span.tile-amount ": " count]])]]
+   ;; Trading house (if not empty)
+   (when (seq (:trading-house game-data))
+     [:div.supply-section
+      [:strong "🏪 Trading House: "]
+      (for [good (:trading-house game-data)]
+        ^{:key good} [:span.supply-chip (name good)])])
 
-   ;; Goods Supply
+   ;; Ships (horizontal)
    [:div.supply-section
-    [:h3 "📦 Goods Supply"]
-    [:div.goods-supply
-     (for [[good count] (:goods-supply game-data)]
-       ^{:key good} [:div.good-count
-                     [:span.good-name (name good)]
-                     [:span.good-amount ": " count]])]]
-
-   ;; Building Supply
-   [:div.supply-section
-    [:h3 "🏗️ Building Supply"]
-    [:div.building-supply
-     (for [[building count] (sort-by first (:building-supply game-data))]
-       ^{:key building} [:div.building-count
-                         [:span.building-name (name building)]
-                         [:span.building-amount ": " count]])]]
-
-   ;; Trading House
-   [:div.supply-section
-    [:h3 "🏪 Trading House"]
-    (if (seq (:trading-house game-data))
-      [:div.trading-house
-       (for [good (:trading-house game-data)]
-         ^{:key good} [:span.traded-good (name good) " "])]
-      [:p.empty "Empty"])]
-
-   ;; Ships
-   [:div.supply-section
-    [:h3 "🚢 Ships"]
-    [:div.ships
-     (for [[idx ship] (map-indexed vector (:ships game-data))]
-       ^{:key idx} [:div.ship
-                    [:span.ship-info
-                     "Ship " (inc idx) ": "
-                     (if (:good ship)
-                       (str (name (:good ship)) " " (:amount ship) "/" (:capacity ship))
-                       (str "Empty (Capacity: " (:capacity ship) ")"))]])]]])
+    [:strong "⛵ Ships: "]
+    (for [[idx ship] (map-indexed vector (:ships game-data))]
+      ^{:key idx} [:span.supply-chip
+                   (if (:good ship)
+                     (str (name (:good ship)) " " (:amount ship) "/" (:capacity ship))
+                     (str "Empty/" (:capacity ship)))])]])
 
 (defn game-log-ui []
   [:div.game-log
@@ -437,63 +411,68 @@
   (let [game-data (:game-state @game-state)]
     (if game-data
       (let [current-player-data (current-player game-data)]
-        [:div.game-board
-         [:h1 "🏝️ Puerto Rico"]
-         [:div.game-info
-          [:p "📅 Round: " (:round game-data)]
-          [:p "⚡ Phase: " (name (:phase game-data))]
-          [:p "👑 Governor: " (:name (state/current-governor game-data))]
-          [:p "👤 Current Player: " (:name current-player-data)]
+        [:div.game-board-compact
+         ;; Compact header bar
+         [:div.header-bar
+          [:h2 "🏝️ Puerto Rico"]
+          [:div.game-status
+           [:span.status-item "📅 Round " (:round game-data)]
+           [:span.status-item "⚡ " (name (:phase game-data))]
+           [:span.status-item "👑 " (:name (state/current-governor game-data))]
+           [:span.status-item "👤 " (:name current-player-data)]]
           (let [ai-player (if (= (:phase game-data) :role-execution)
                             (current-role-executor game-data)
                             (when (:is-ai current-player-data) current-player-data))]
             (when ai-player
-              [:div.ai-indicator
-               [:p "🤖 AI Player - " (:name ai-player) " is thinking..."]
-               [:button.ai-button {:on-click #(handle-ai-turn game-data)}
-                (if (= (:phase game-data) :role-selection)
-                  "Let AI Select Role"
-                  "Let AI Make Move")]]))]
+              [:button.ai-button-compact {:on-click #(handle-ai-turn game-data)}
+               "🤖 " (:name ai-player)]))]
 
-         [:div.main-content
-          [:div.left-column
+         ;; Players in horizontal row (compact)
+         [:div.players-row
+          (for [[idx player] (map-indexed vector (:players game-data))]
+            ^{:key (:id player)}
+            [player-board player (= idx (:current-player-idx game-data))])]
+
+         ;; Main action area and common area side by side
+         [:div.main-area
+          [:div.action-area
            (let [executor (current-role-executor game-data)]
              (cond
-               ;; Role execution phase - check if it's AI's turn
+               ;; Role execution phase - AI turn
                (and (= (:phase game-data) :role-execution) (:is-ai executor))
-               [:div.ai-waiting
-                [:h2 "🤖 AI Turn"]
-                [:p (:name executor) " is executing " (name (:selected-role game-data))]]
+               [:div.ai-turn-compact
+                [:h3 "🤖 " (:name executor) " executing " (name (:selected-role game-data))]]
 
-               ;; Role execution phase - human player's turn
+               ;; Role execution phase - human turn
                (= (:phase game-data) :role-execution)
                [role-execution-ui game-data]
 
-;; Role selection phase - check if it's AI's turn
+               ;; Role selection phase - AI turn
                (and (= (:phase game-data) :role-selection) (:is-ai current-player-data))
-               [:div.ai-waiting
-                [:h2 "🤖 AI Turn"]
-                [:p (:name current-player-data) " is selecting a role..."]]
+               [:div.ai-turn-compact
+                [:h3 "🤖 " (:name current-player-data) " selecting role..."]]
 
-               ;; Role selection phase - human player's turn
+               ;; Role selection phase - human turn
                :else
-               [:div.roles-section
-                [:h2 "🎭 Available Roles"]
-                [:div.roles-grid
+               [:div.roles-section-compact
+                [:h3 "🎭 Available Roles"]
+                [:div.roles-grid-compact
                  (for [role (:available-roles game-data)]
-                   ^{:key role} [role-card role true (get-in game-data [:role-gold role] 0) handle-role-selection])]]))
+                   ^{:key role} [role-card role true (get-in game-data [:role-gold role] 0) handle-role-selection])]]))]
 
-           [common-area game-data]]
-
-          [:div.right-column
-           [:div.players-section
-            [:h2 "👥 Players"]
-            [:div.players-grid
-             (for [[idx player] (map-indexed vector (:players game-data))]
-               ^{:key (:id player)}
-               [player-board player (= idx (:current-player-idx game-data))])]]
-
-           [game-log-ui]]]])
+          [:div.sidebar
+           [common-area game-data]
+           [:div.log-compact
+            [:h4 "📜 Recent"]
+            [:div.log-entries-mini
+             (if (seq @game-log)
+               (for [[idx entry] (map-indexed vector (take 3 (reverse @game-log)))]
+                 ^{:key idx}
+                 [:div.log-entry-mini
+                  (when (:player entry)
+                    [:span.player-mini (:player entry) ": "])
+                  [:span.message-mini (:message entry)]])
+               [:div.log-empty-mini "No events yet..."])]]]]])
       [:div.no-game
        [:h1 "🏝️ Puerto Rico"]
        [:p "Welcome to the Puerto Rico board game!"]
