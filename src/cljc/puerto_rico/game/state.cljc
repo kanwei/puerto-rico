@@ -203,6 +203,70 @@
 (defn advance-to-next-player [game-state]
   (assoc game-state :current-player-idx (next-player-idx game-state)))
 
+(defn has-occupied-building?
+  "Check if player has an occupied building of the given type"
+  [player building-type]
+  (some #(and (= (:type %) building-type)
+              (> (:colonists %) 0)) (:buildings player)))
+
+(defn count-production-buildings
+  "Count small and large production buildings in player's city"
+  [player]
+  (let [player-building-types (map :type (:buildings player))
+        small-production [:small-indigo-maker :small-sugar-maker]
+        large-production [:large-indigo-maker :large-sugar-maker :tobacco-maker :coffee-maker]]
+    {:small (count (filter #(some #{%} small-production) player-building-types))
+     :large (count (filter #(some #{%} large-production) player-building-types))}))
+
+(defn count-filled-island-spaces
+  "Count total plantations and quarries placed on player's island"
+  [player]
+  (count (:plantations player)))
+
+(defn count-total-colonists
+  "Count total colonists on player's board (plantations + buildings + San Juan)"
+  [player]
+  (let [plantation-colonists (reduce + (map :colonists (:plantations player)))
+        building-colonists (reduce + (map :colonists (:buildings player)))
+        san-juan-colonists (:san-juan-colonists player)]
+    (+ plantation-colonists building-colonists san-juan-colonists)))
+
+(defn count-violet-buildings
+  "Count violet (non-production) buildings in player's city"
+  [player]
+  (let [player-building-types (map :type (:buildings player))
+        production-buildings #{:small-indigo-maker :small-sugar-maker
+                               :large-indigo-maker :large-sugar-maker
+                               :tobacco-maker :coffee-maker}]
+    (count (remove production-buildings player-building-types))))
+
+(defn calculate-large-building-bonuses
+  "Calculate bonus victory points from occupied large buildings"
+  [player]
+  (let [guild-hall-bonus (if (has-occupied-building? player :guild-hall)
+                           (let [{:keys [small large]} (count-production-buildings player)]
+                             (+ (* small 1) (* large 2)))
+                           0)
+        residence-bonus (if (has-occupied-building? player :residence)
+                          (let [filled-spaces (count-filled-island-spaces player)]
+                            (cond
+                              (>= filled-spaces 12) 7
+                              (>= filled-spaces 11) 6
+                              (>= filled-spaces 10) 5
+                              (>= filled-spaces 9) 4
+                              :else 0))
+                          0)
+        fortress-bonus (if (has-occupied-building? player :fortress)
+                         (quot (count-total-colonists player) 3)
+                         0)
+        customs-house-bonus (if (has-occupied-building? player :customs-house)
+                              (quot (:victory-points player) 4)
+                              0)
+        city-hall-bonus (if (has-occupied-building? player :city-hall)
+                          (count-violet-buildings player)
+                          0)]
+    (+ guild-hall-bonus residence-bonus fortress-bonus customs-house-bonus city-hall-bonus)))
+
 ;; Victory condition checks
 (defn check-victory-conditions [game-state]
   (let [players (:players game-state)]
@@ -218,5 +282,5 @@
 (defn calculate-victory-points [player]
   (let [building-vps (reduce + (map #(get-in buildings [% :vp] 0) (:buildings player)))
         goods-vps (quot (reduce + (vals (:goods player))) 1)
-        bonus-vps 0] ; TODO: Add bonus VP calculations from large buildings
-    (+ (:victory-points player) building-vps goods-vps bonus-vps)))
+        large-building-bonuses (calculate-large-building-bonuses player)]
+    (+ (:victory-points player) building-vps goods-vps large-building-bonuses)))
