@@ -47,12 +47,10 @@
       (case role
         (:mayor :craftsman :prospector)
         (-> (rules/execute-role game-state role player-id)
-            (rules/end-role-execution)
-            (rules/end-round))
+            (rules/end-role-execution))
 
         (-> (rules/execute-role game-state role player-id move)
-            (rules/end-role-execution)
-            (rules/end-round))))
+            (rules/end-role-execution))))
 
     game-state))
 

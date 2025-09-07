@@ -99,34 +99,82 @@
 ;; Game state structure
 (defn new-game-state
   [players]
-  {:players players
-   :current-player-idx 0
-   :governor-idx 0 ;; Track who is the governor
-   :round 1
-   :phase :role-selection
-   :selected-role nil
-   :role-selector-idx nil
-   :role-execution-order nil
-   :role-execution-current-idx nil
-   :available-roles (set roles)
-   :used-roles #{}
-   ;; Track gold coins on each role card
-   :role-gold (into {} (map #(vector % 0) roles))
-   ;; Track how many players have selected roles this round
-   :players-selected-this-round 0
-   :plantation-supply plantation-tiles
-   :goods-supply {:corn 10 :indigo 11 :sugar 11 :tobacco 9 :coffee 9}
-   :colonist-supply 95
-   ;; Colonist ship for Mayor role (starts with number of players)
-   :colonist-ship (count players)
-   :building-supply (create-building-supply buildings)
-   :victory-point-supply 122
-   :ships [{:capacity 4 :good nil :amount 0}
-           {:capacity 5 :good nil :amount 0}
-           {:capacity 6 :good nil :amount 0}]
-   :trading-house []
-   :game-over false
-   :winner nil})
+  (let [num-players (count players)
+        ;; Set up initial plantations according to rules
+        players-with-plantations
+        (vec (map-indexed
+              (fn [idx player]
+                (let [plantation (cond
+                                   (= idx 0) :indigo ;; Governor gets indigo
+                                   (and (= num-players 3) (= idx 1)) :indigo
+                                   (and (= num-players 3) (= idx 2)) :corn
+                                   (and (= num-players 4) (= idx 1)) :indigo
+                                   (and (= num-players 4) (>= idx 2)) :corn
+                                   (and (= num-players 5) (>= idx 3)) :corn
+                                   (and (= num-players 5) (= idx 1)) :indigo
+                                   (and (= num-players 5) (= idx 2)) :indigo
+                                   :else nil)]
+                  (if plantation
+                    (assoc player :plantations [{:type plantation :colonists 0}])
+                    player)))
+              players))
+        ;; Calculate plantation supply after initial distribution
+        initial-plantations (map (fn [idx]
+                                   (cond
+                                     (= idx 0) :indigo
+                                     (and (= num-players 3) (= idx 1)) :indigo
+                                     (and (= num-players 3) (= idx 2)) :corn
+                                     (and (= num-players 4) (= idx 1)) :indigo
+                                     (and (= num-players 4) (>= idx 2)) :corn
+                                     (and (= num-players 5) (= idx 1)) :indigo
+                                     (and (= num-players 5) (= idx 2)) :indigo
+                                     (and (= num-players 5) (>= idx 3)) :corn
+                                     :else nil))
+                                 (range num-players))
+        plantation-reductions (frequencies (remove nil? initial-plantations))
+        remaining-plantations (merge-with - plantation-tiles plantation-reductions)
+        ;; Separate quarries from regular plantations  
+        regular-plantation-types [:corn :indigo :sugar :tobacco :coffee]
+        quarry-count (:quarry remaining-plantations)
+        regular-plantations (select-keys remaining-plantations regular-plantation-types)
+        ;; Create shuffled deck from regular plantations only
+        plantation-deck (shuffle (mapcat (fn [[type count]]
+                                           (repeat count type))
+                                         regular-plantations))
+        ;; Draw n+1 face-up plantations
+        face-up-count (inc num-players)
+        face-up-plantations (vec (take face-up-count plantation-deck))
+        remaining-deck (vec (drop face-up-count plantation-deck))]
+    {:players players-with-plantations
+     :current-player-idx 0
+     :governor-idx 0 ;; Track who is the governor
+     :round 1
+     :phase :role-selection
+     :selected-role nil
+     :role-selector-idx nil
+     :role-execution-order nil
+     :role-execution-current-idx nil
+     :available-roles (set roles)
+     :used-roles #{}
+     ;; Track gold coins on each role card
+     :role-gold (into {} (map #(vector % 0) roles))
+     ;; Track how many players have selected roles this round
+     :players-selected-this-round 0
+     :plantation-supply remaining-deck
+     :face-up-plantations face-up-plantations
+     :quarry-supply quarry-count
+     :goods-supply {:corn 10 :indigo 11 :sugar 11 :tobacco 9 :coffee 9}
+     :colonist-supply 95
+     ;; Colonist ship for Mayor role (starts with number of players)
+     :colonist-ship (count players-with-plantations)
+     :building-supply (create-building-supply buildings)
+     :victory-point-supply 122
+     :ships [{:capacity 4 :good nil :amount 0}
+             {:capacity 5 :good nil :amount 0}
+             {:capacity 6 :good nil :amount 0}]
+     :trading-house []
+     :game-over false
+     :winner nil}))
 
 ;; Game state accessors
 (defn current-player [game-state]

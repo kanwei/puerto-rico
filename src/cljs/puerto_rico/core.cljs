@@ -144,9 +144,13 @@
               (let [selected-role (:selected-role current-game)]
                 (case selected-role
                   :settler
-                  (let [available-plantations (keys (filter #(pos? (val %)) (:plantation-supply current-game)))
-                        plantation (rand-nth available-plantations)]
-                    (handle-plantation-choice plantation))
+                  (let [face-up-plantations (:face-up-plantations current-game)
+                        quarry-supply (:quarry-supply current-game)
+                        available-choices (concat face-up-plantations
+                                                  (when (pos? quarry-supply) [:quarry]))]
+                    (when (seq available-choices)
+                      (let [choice (rand-nth available-choices)]
+                        (handle-plantation-choice choice))))
 
                   :builder
                   (let [executor-player (current-role-executor current-game)
@@ -222,25 +226,33 @@
          "Choose this role")]])
 
 (defn plantation-choice-ui [game-data]
-  (let [available-plantations (filter #(pos? (val %)) (:plantation-supply game-data))
+  (let [face-up-plantations (:face-up-plantations game-data)
+        quarry-supply (:quarry-supply game-data)
         current-player-data (current-role-executor game-data)]
     [:div.role-execution
      [:h2 "🌱 Settler - Choose a Plantation"]
-     (if (seq available-plantations)
-       [:div
-        [:p "Select a plantation tile to place on your island:"]
-        [:div.choice-grid
-         (for [[plantation-type count] available-plantations]
-           ^{:key plantation-type}
-           [:div.choice-card {:on-click #(handle-plantation-choice plantation-type)}
-            [:h3 (name plantation-type)]
-            [:p "Available: " count]])]]
-       [:div
-        [:p "No plantation tiles available."]
-        [:div.choice-grid
+     [:div
+      [:p "Select a plantation tile to place on your island:"]
+      [:div.choice-grid
+       ;; Face-up plantation choices
+       (for [[idx plantation-type] (map-indexed vector face-up-plantations)]
+         ^{:key (str "face-up-" idx)}
+         [:div.choice-card {:on-click #(handle-plantation-choice plantation-type)}
+          [:h3 (name plantation-type)]])
+
+       ;; Quarry choice (if available)
+       (when (pos? quarry-supply)
+         ^{:key "quarry"}
+         [:div.choice-card {:on-click #(handle-plantation-choice :quarry)}
+          [:h3 "quarry"]
+          [:p "Available: " quarry-supply]])
+
+       ;; Skip option if nothing available
+       (when (and (empty? face-up-plantations) (zero? (or quarry-supply 0)))
+         ^{:key "skip"}
          [:div.choice-card.skip {:on-click #(handle-skip-role :settler)}
           [:h3 "Skip"]
-          [:p "No plantations left"]]]])]))
+          [:p "No plantations left"]])]]]))
 
 (defn building-choice-ui [game-data]
   (let [current-player-data (current-role-executor game-data)
@@ -365,11 +377,13 @@
     [:div.supply-item
      [:strong "🚢 Ship: "] (get game-data :colonist-ship 0)]]
 
-   ;; Plantation supply (horizontal)
+;; Face-up plantations (horizontal)
    [:div.supply-section
-    [:strong "🌱 Plantations: "]
-    (for [[tile-type count] (sort-by first (:plantation-supply game-data))]
-      ^{:key tile-type} [:span.supply-chip (str (name tile-type) ":" count)])]
+    [:strong "🌱 Available Plantations: "]
+    (let [face-up (:face-up-plantations game-data)]
+      (for [[idx plantation-type] (map-indexed vector face-up)]
+        ^{:key idx} [:span.supply-chip (name plantation-type)]))
+    [:span.supply-chip (str "quarries:" (get game-data :quarry-supply 0))]]
 
    ;; Goods supply (horizontal) 
    [:div.supply-section

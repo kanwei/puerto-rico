@@ -8,22 +8,56 @@
 ;; Role execution functions
 
 (defn execute-settler [game-state player-id plantation-choice]
-  "Execute the settler role - player gets to take a plantation"
+  "Execute the settler role - player gets to take a plantation from face-up tiles or a quarry"
   (let [player-idx (->> (:players game-state)
                         (map-indexed vector)
                         (filter #(= (:id (second %)) player-id))
                         first
                         first)
-        available-plantations (keys (filter #(pos? (val %)) (:plantation-supply game-state)))]
-    (if (and plantation-choice
-             (contains? (set available-plantations) plantation-choice)
-             player-idx
-             (>= player-idx 0)
-             (< player-idx (count (:players game-state))))
-      (-> game-state
-          ;; Add plantation as a map with colonist tracking
-          (update-in [:players player-idx :plantations] conj {:type plantation-choice :colonists 0})
-          (update-in [:plantation-supply plantation-choice] dec))
+        face-up-plantations (:face-up-plantations game-state)
+        quarry-supply (:quarry-supply game-state)]
+    (cond
+      ;; Invalid parameters
+      (not (and plantation-choice player-idx
+                (>= player-idx 0)
+                (< player-idx (count (:players game-state)))))
+      game-state
+
+      ;; Choosing a quarry
+      (= plantation-choice :quarry)
+      (if (pos? quarry-supply)
+        (-> game-state
+            (update-in [:players player-idx :plantations] conj {:type :quarry :colonists 0})
+            (update :quarry-supply dec))
+        game-state)
+
+      ;; Choosing from face-up plantations
+      (some #(= % plantation-choice) face-up-plantations)
+      (let [;; Remove the first occurrence of the chosen plantation
+            idx (.indexOf face-up-plantations plantation-choice)
+            updated-face-up (vec (concat (subvec face-up-plantations 0 idx)
+                                         (subvec face-up-plantations (inc idx))))
+            ;; Draw replacement from deck
+            plantation-deck (:plantation-supply game-state)
+            new-face-up (if (seq plantation-deck)
+                          (conj updated-face-up (first plantation-deck))
+                          updated-face-up)
+            new-deck (if (seq plantation-deck)
+                       (vec (rest plantation-deck))
+                       [])
+            ;; Update player's plantations
+            updated-players (assoc-in (:players game-state)
+                                      [player-idx :plantations]
+                                      (conj (get-in (:players game-state) [player-idx :plantations])
+                                            {:type plantation-choice :colonists 0}))]
+        ;; Return updated game state
+        (assoc game-state
+               :face-up-plantations new-face-up
+               :plantation-supply new-deck
+               :players updated-players))
+
+      ;; Invalid choice
+      :else
       game-state)))
 
 (defn get-tile-capacity [tile]
