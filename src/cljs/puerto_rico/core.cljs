@@ -267,16 +267,21 @@
 
 (defn building-choice-ui [game-data]
   (let [current-player-data (current-role-executor game-data)
+;; Get building types the player already owns
+        owned-building-types (set (map :type (:buildings current-player-data)))
         affordable-buildings (filter (fn [[building-key building-info]]
                                        (and (>= (:money current-player-data) (:cost building-info))
-                                            (pos? (get (:building-supply game-data) building-key 0))))
+                                            (pos? (get (:building-supply game-data) building-key 0))
+                                            ;; Can't build same type twice
+                                            (not (contains? owned-building-types building-key))))
                                      state/buildings)]
     [:div.role-execution
      [:h2 "🏗️ Builder - Choose a Building"]
      (if (seq affordable-buildings)
        [:div
-        [:p "Select a building to construct (You have $" (:money current-player-data) "):"]
+        [:p "Select a building to construct or skip (You have $" (:money current-player-data) "):"]
         [:div.choice-grid
+         ;; Building options
          (for [[building-key building-info] affordable-buildings]
            ^{:key building-key}
            [:div.choice-card.building-card {:on-click #(handle-building-choice building-key)}
@@ -288,7 +293,12 @@
              [:p "Available: " (get (:building-supply game-data) building-key 0)]]
             (when (:description building-info)
               [:div.building-description
-               [:p.description-text (:description building-info)]])])]]
+               [:p.description-text (:description building-info)]])])
+         ;; Skip option
+         ^{:key "skip"}
+         [:div.choice-card.skip {:on-click #(handle-skip-role :builder)}
+          [:h3 "Skip"]
+          [:p "Don't build anything"]]]]
        [:div
         [:p (:name current-player-data) " cannot afford any buildings (You have $" (:money current-player-data) ")."]
         [:div.choice-grid
