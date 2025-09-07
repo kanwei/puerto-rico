@@ -501,11 +501,19 @@
 
 (defn good-choice-ui [game-data role]
   (let [current-player-data (current-role-executor game-data)
-        available-goods (if (= role :captain)
+        available-goods (cond
+                          (= role :captain)
                           ;; For captain, check if goods can actually be shipped
                           (filter #(and (pos? (get-in current-player-data [:goods %] 0))
                                         (rules/find-ship-for-good (:ships game-data) % 1))
                                   [:corn :indigo :sugar :tobacco :coffee])
+
+                          (= role :trader)
+                          ;; For trader, check if goods can actually be traded (not already in trading house)
+                          (filter #(rules/can-trade-good? game-data current-player-data %)
+                                  [:corn :indigo :sugar :tobacco :coffee])
+
+                          :else
                           ;; For other roles, just check if player has the good
                           (filter #(pos? (get-in current-player-data [:goods %] 0))
                                   [:corn :indigo :sugar :tobacco :coffee]))

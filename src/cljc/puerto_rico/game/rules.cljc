@@ -398,6 +398,20 @@
   (some #(and (= (:type %) building-type) (pos? (:colonists %)))
         (:buildings player)))
 
+(defn clear-full-trading-house [game-state]
+  "Clear trading house if it contains 4 different goods, returning goods to supply"
+  (let [trading-house (:trading-house game-state)
+        unique-goods (set (map :good trading-house))]
+    (if (>= (count unique-goods) 4)
+      ;; Trading house is full - return goods to supply and clear it
+      (let [trading-house-goods (frequencies (map :good trading-house))]
+        (-> game-state
+            (update :goods-supply (fn [goods-supply]
+                                    (merge-with + goods-supply trading-house-goods)))
+            (assoc :trading-house [])))
+      ;; Trading house not full - no change
+      game-state)))
+
 (defn execute-trader [game-state player-id good-choice]
   "Execute the trader role - sell goods to trading house"
   (let [player-idx (->> (:players game-state)
@@ -424,10 +438,12 @@
         privilege-bonus (if is-role-selector? 1 0)
         total-value (+ base-trade-value market-bonus privilege-bonus)]
     (if (and good-choice (can-trade-good? game-state player good-choice))
-      (-> game-state
-          (update-in [:players player-idx :goods good-choice] dec)
-          (update-in [:players player-idx :money] + total-value)
-          (update :trading-house conj {:good good-choice :player-id player-id}))
+      (let [game-after-trade (-> game-state
+                                 (update-in [:players player-idx :goods good-choice] dec)
+                                 (update-in [:players player-idx :money] + total-value)
+                                 (update :trading-house conj {:good good-choice :player-id player-id}))]
+        ;; Check if trading house is now full and clear it if so
+        (clear-full-trading-house game-after-trade))
       game-state)))
 
 (defn award-victory-points
@@ -608,7 +624,7 @@
                   (assoc :players-selected-this-round 0)
                   (assoc :phase :role-selection)
                   ;; Clear trading house
-                  (assoc :trading-house [])))
+                  ))
                   ;; Ships are now reset immediately when full in execute-captain
             ;; Round continues
             game-after-prospector))
@@ -722,7 +738,7 @@
                   (assoc :players-selected-this-round 0)
                   (assoc :phase :role-selection)
                   ;; Clear trading house
-                  (assoc :trading-house [])
+
 ;; Reset full ships and return goods to supply
                   (return-full-ships-to-supply))))
           ;; Round continues with next player
@@ -759,9 +775,7 @@
     ;; Check if round should end (each player has selected a role)
     (if (>= players-selected num-players)
       ;; Round is complete, start new round
-      (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))
-            ;; Return trading house goods to supply
-            trading-house-goods (frequencies (map :good (:trading-house game-after-role)))]
+      (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))]
         (-> game-after-role
             (update :round inc)
             (assoc :available-roles (set state/roles))
@@ -772,17 +786,12 @@
                                            (update rg role inc))
                                          role-gold
                                          unpicked-roles)))
-            ;; Return trading house goods to supply
-            (update :goods-supply (fn [goods-supply]
-                                    (merge-with + goods-supply trading-house-goods)))
             ;; Rotate governor to next player
             (assoc :governor-idx (mod (inc (:governor-idx game-after-role)) num-players))
             (assoc :current-player-idx (mod (inc (:governor-idx game-after-role)) num-players)) ;; Governor goes first
             (assoc :players-selected-this-round 0)
             (assoc :phase :role-selection)
-            ;; Clear trading house
-            (assoc :trading-house [])
-;; Reset full ships and return goods to supply
+            ;; Reset full ships and return goods to supply
             (return-full-ships-to-supply)))
       ;; Round continues with next player
       game-after-role)))
