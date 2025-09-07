@@ -720,7 +720,9 @@
     ;; Check if round should end (each player has selected a role)
     (if (>= players-selected num-players)
       ;; Round is complete, start new round
-      (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))]
+      (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))
+            ;; Return trading house goods to supply
+            trading-house-goods (frequencies (map :good (:trading-house game-after-role)))]
         (-> game-after-role
             (update :round inc)
             (assoc :available-roles (set state/roles))
@@ -731,6 +733,9 @@
                                            (update rg role inc))
                                          role-gold
                                          unpicked-roles)))
+            ;; Return trading house goods to supply
+            (update :goods-supply (fn [goods-supply]
+                                    (merge-with + goods-supply trading-house-goods)))
             ;; Rotate governor to next player
             (assoc :governor-idx (mod (inc (:governor-idx game-after-role)) num-players))
             (assoc :current-player-idx (mod (inc (:governor-idx game-after-role)) num-players)) ;; Governor goes first
