@@ -1,0 +1,306 @@
+/* Layout Fixes */
+.game-board-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 15px;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+/* Header Bar */
+.header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #2c3e50;
+  color: white;
+  padding: 15px 20px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+
+.header-bar h2 {
+  margin: 0;
+  font-size: 1.8em;
+}
+
+.game-status {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+}
+
+.status-item {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: bold;
+}
+
+/* Player Cards - Fixed Sizing */
+.players-row {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.player-board {
+  background: #ecf0f1;
+  border: 2px solid #bdc3c7;
+  border-radius: 12px;
+  padding: 15px;
+  min-width: 280px;
+  flex: 1;
+  max-width: 400px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.player-board.current-player {
+  border-color: #f39c12;
+  background: #fdf6e3;
+  box-shadow: 0 0 15px rgba(243, 156, 18, 0.3);
+}
+
+/* Player Header */
+.player-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #d5dbdb;
+}
+
+.player-name {
+  margin: 0;
+  font-size: 1.3em;
+  color: #2c3e50;
+  font-weight: bold;
+}
+
+/* Larger Badges */
+.player-quick-stats {
+  display: flex;
+  gap: 8px;
+}
+
+.money-badge, .vp-badge, .san-juan-badge {
+  background: #3498db;
+  color: white;
+  padding: 8px 12px;
+  border-radius: 20px;
+  font-weight: bold;
+  font-size: 1.1em;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  min-width: 45px;
+  text-align: center;
+}
+
+.money-badge {
+  background: #27ae60;
+}
+
+.vp-badge {
+  background: #f39c12;
+}
+
+.san-juan-badge {
+  background: #8e44ad;
+}
+
+/* Player Assets */
+.player-assets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.buildings-compact, .plantations-compact, .goods-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  line-height: 1.4;
+}
+
+.building-chip, .plantation-chip, .good-chip {
+  background: #34495e;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 0.85em;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.building-chip {
+  background: #e67e22;
+}
+
+.plantation-chip {
+  background: #27ae60;
+}
+
+.good-chip {
+  background: #8e44ad;
+}
+
+/* Main Area Layout */
+.main-area {
+  display: flex;
+  gap: 20px;
+  flex: 1;
+  min-height: 400px;
+}
+
+.action-area {
+  flex: 2;
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  overflow-y: auto;
+  max-height: 600px;
+}
+
+.sidebar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  min-width: 300px;
+  max-width: 400px;
+}
+
+/* Game Log Improvements */
+.game-log {
+  background: white;
+  border-radius: 12px;
+  padding: 15px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  flex: 1;
+  min-height: 250px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+}
+
+.game-log h3 {
+  margin: 0 0 15px 0;
+  color: #2c3e50;
+  border-bottom: 2px solid #ecf0f1;
+  padding-bottom: 10px;
+}
+
+.log-entries {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 300px;
+  padding-right: 10px;
+}
+
+.log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #ecf0f1;
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+.log-entry:last-child {
+  border-bottom: none;
+}
+
+/* Turn Number Styling */
+.turn-number {
+  background: #3498db;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-weight: bold;
+  font-size: 0.85em;
+  min-width: 35px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.log-entry .player {
+  font-weight: bold;
+  color: #2c3e50;
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.log-entry .message {
+  color: #34495e;
+  flex: 1;
+}
+
+.log-empty {
+  text-align: center;
+  color: #7f8c8d;
+  padding: 20px;
+  font-style: italic;
+}
+
+/* Common Area */
+.common-area {
+  background: white;
+  border-radius: 12px;
+  padding: 15px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.common-area h3 {
+  margin: 0 0 15px 0;
+  color: #2c3e50;
+  border-bottom: 2px solid #ecf0f1;
+  padding-bottom: 10px;
+}
+
+/* Responsive Design */
+@media (max-width: 1200px) {
+  .main-area {
+    flex-direction: column;
+  }
+  
+  .sidebar {
+    flex-direction: row;
+    min-width: 100%;
+    max-width: 100%;
+  }
+  
+  .game-log {
+    min-height: 200px;
+    max-height: 250px;
+  }
+}
+
+@media (max-width: 768px) {
+  .players-row {
+    flex-direction: column;
+  }
+  
+  .player-board {
+    max-width: 100%;
+  }
+  
+  .player-header {
+    flex-direction: column;
+    gap: 10px;
+    text-align: center;
+  }
+  
+  .main-area {
+    flex-direction: column;
+  }
+  
+  .sidebar {
+    flex-direction: column;
+  }
+}

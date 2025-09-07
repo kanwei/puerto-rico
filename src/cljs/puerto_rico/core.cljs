@@ -26,14 +26,19 @@
 (defonce game-log (reagent/atom []))
 
 (defn add-log-entry [message & [player-name]]
-  (let [timestamp (.toLocaleTimeString (js/Date.))
-        entry {:timestamp timestamp
+  (let [current-game (:game-state @game-state)
+        round-num (:round current-game 1)
+        current-player-idx (:current-player-idx current-game)
+        players-count (count (:players current-game))
+        ;; Calculate turn number within round (1-based)
+        turn-num (if current-player-idx (inc current-player-idx) 1)
+        turn-label (str round-num "." turn-num)
+        entry {:turn turn-label
                :message message
                :player player-name}]
     (swap! game-log conj entry)
-    ;; Keep only last 20 entries to prevent memory issues
-    (when (> (count @game-log) 20)
-      (swap! game-log #(vec (take-last 20 %))))))
+    ;; No limit - keep all entries to see start of game
+    ))
 
 (defn clear-log []
   (reset! game-log []))
@@ -554,14 +559,14 @@
 (defn player-board [player current?]
   [:div.player-board {:class (when current? "current-player")}
    [:div.player-header
-    [:h4 (str (:name player) (when current? " ⭐"))]
+    [:h4.player-name (str (:name player) (when current? " ⭐"))]
     [:div.player-quick-stats
-     [:span.money "💰$" (:money player)]
-     [:span.vp "🏆" (:victory-points player)]
-     [:span.san-juan "🏘️" (get player :san-juan-colonists 0)]]]
+     [:span.money-badge "💰$" (:money player)]
+     [:span.vp-badge "🏆" (:victory-points player)]
+     [:span.san-juan-badge "🏘️" (get player :san-juan-colonists 0)]]]
 
    [:div.player-assets
-;; Buildings (more compact)
+    ;; Buildings (more compact)
     (when (seq (:buildings player))
       [:div.buildings-compact
        [:strong "🏢 "]
@@ -572,7 +577,7 @@
            ^{:key idx} [:span.building-chip
                         (str (name building-type) " " (worker-slots-display occupied total-capacity))]))])
 
-;; Plantations (more compact)
+    ;; Plantations (more compact)
     (when (seq (:plantations player))
       [:div.plantations-compact
        [:strong "🌱 "]
@@ -640,11 +645,11 @@
    [:h3 "📜 Game Log"]
    [:div.log-entries
     (if (seq @game-log)
-      ;; Show all entries in reverse chronological order (most recent first)
-      (for [[idx entry] (map-indexed vector (reverse @game-log))]
+      ;; Show all entries in chronological order (oldest first)
+      (for [[idx entry] (map-indexed vector @game-log)]
         ^{:key idx}
         [:div.log-entry
-         [:span.timestamp (:timestamp entry)]
+         [:span.turn-number (:turn entry)]
          (when (:player entry)
            [:span.player (:player entry) ":"])
          [:span.message (:message entry)]])
