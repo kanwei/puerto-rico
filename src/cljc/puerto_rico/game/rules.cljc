@@ -478,6 +478,22 @@
       ;; Rule 3: Cannot ship if no valid ship exists
       :else nil)))
 
+(defn return-full-ships-to-supply [game-state]
+  "Check all ships and return goods from full ships to supply, then reset those ships"
+  (let [ships (:ships game-state)]
+    (reduce (fn [game ship-idx]
+              (let [ship (get ships ship-idx)]
+                (if (= (:amount ship) (:capacity ship))
+                  ;; Ship is full - return goods to supply and reset ship
+                  (-> game
+                      (update-in [:goods-supply (:good ship)] + (:amount ship))
+                      (assoc-in [:ships ship-idx :good] nil)
+                      (assoc-in [:ships ship-idx :amount] 0))
+                  ;; Ship not full - no change
+                  game)))
+            game-state
+            (range (count ships)))))
+
 (defn execute-captain [game-state player-id good-choice]
   "Execute the captain role - ship goods"
   (let [player-idx (->> (:players game-state)
@@ -553,14 +569,8 @@
                   (assoc :players-selected-this-round 0)
                   (assoc :phase :role-selection)
                   ;; Clear trading house
-                  (assoc :trading-house [])
-                  ;; Reset ships if full
-                  (update :ships (fn [ships]
-                                   (mapv (fn [ship]
-                                           (if (= (:amount ship) (:capacity ship))
-                                             (assoc ship :good nil :amount 0)
-                                             ship))
-                                         ships)))))
+                  (assoc :trading-house [])))
+                  ;; Ships are now reset immediately when full in execute-captain
             ;; Round continues
             game-after-prospector))
         ;; All other roles: all players execute in turn order
@@ -633,16 +643,11 @@
                                                 (assoc :role-execution-order nil)
                                                 (assoc :role-execution-current-idx nil)
                                                 (assoc :current-player-idx (state/next-player-idx game-state)))]
-                              ;; If Captain role just finished, apply storage rules and empty full ships
+;; If Captain role just finished, apply storage rules and empty full ships
                               (if (= completed-role :captain)
                                 (-> base-game
                                     (apply-storage-rules)
-                                    (update :ships (fn [ships]
-                                                     (mapv (fn [ship]
-                                                             (if (= (:amount ship) (:capacity ship))
-                                                               (assoc ship :good nil :amount 0)
-                                                               ship))
-                                                           ships))))
+                                    (return-full-ships-to-supply))
                                 base-game))
             players-selected (:players-selected-this-round game-after-role)
             num-players (count (:players game-after-role))]
@@ -679,13 +684,8 @@
                   (assoc :phase :role-selection)
                   ;; Clear trading house
                   (assoc :trading-house [])
-                  ;; Reset ships if full
-                  (update :ships (fn [ships]
-                                   (mapv (fn [ship]
-                                           (if (= (:amount ship) (:capacity ship))
-                                             (assoc ship :good nil :amount 0)
-                                             ship))
-                                         ships))))))
+;; Reset full ships and return goods to supply
+                  (return-full-ships-to-supply))))
           ;; Round continues with next player
           game-after-role))
       ;; Move to next player in execution order
@@ -743,13 +743,8 @@
             (assoc :phase :role-selection)
             ;; Clear trading house
             (assoc :trading-house [])
-            ;; Reset ships if full
-            (update :ships (fn [ships]
-                             (mapv (fn [ship]
-                                     (if (= (:amount ship) (:capacity ship))
-                                       (assoc ship :good nil :amount 0)
-                                       ship))
-                                   ships)))))
+;; Reset full ships and return goods to supply
+            (return-full-ships-to-supply)))
       ;; Round continues with next player
       game-after-role)))
 
