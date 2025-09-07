@@ -414,13 +414,22 @@
         next-position (inc current-position)]
     (if (>= next-position (count execution-order))
       ;; All players have executed the role, back to role selection
-      (let [game-after-role (-> game-state
+      (let [completed-role (:selected-role game-state)
+            game-after-role (-> game-state
                                 (assoc :phase :role-selection)
                                 (assoc :selected-role nil)
                                 (assoc :role-selector-idx nil)
                                 (assoc :role-execution-order nil)
                                 (assoc :role-execution-current-idx nil)
-                                (assoc :current-player-idx (state/next-player-idx game-state)))
+                                (assoc :current-player-idx (state/next-player-idx game-state))
+                            ;; If Captain role just finished, empty full ships
+                                (cond-> (= completed-role :captain)
+                                  (update :ships (fn [ships]
+                                                   (mapv (fn [ship]
+                                                           (if (= (:amount ship) (:capacity ship))
+                                                             (assoc ship :good nil :amount 0)
+                                                             ship))
+                                                         ships)))))
             players-selected (:players-selected-this-round game-after-role)
             num-players (count (:players game-after-role))]
         ;; Check if round should end (each player has selected a role)
