@@ -127,56 +127,53 @@
     (when ai-player
       (let [player-id (:id ai-player)
             difficulty (:difficulty ai-player :medium)]
-        ;; Use setTimeout to make AI decisions feel more natural
-        (js/setTimeout
-         (fn []
-           (let [current-game (:game-state @game-state)]
-             (when (and current-game
-                        (= (:current-player-idx current-game)
-                           (:current-player-idx game-data)))
-               ;; Import AI function dynamically
-               (case (:phase current-game)
-                 :role-selection
-                 (let [available-roles (:available-roles current-game)
-                       ;; Simple AI: pick a random available role
-                       role (rand-nth (vec available-roles))]
-                   (handle-role-selection role))
+        ;; Execute AI decision immediately without delay
+        (let [current-game (:game-state @game-state)]
+          (when (and current-game
+                     (= (:current-player-idx current-game)
+                        (:current-player-idx game-data)))
+            ;; Import AI function dynamically
+            (case (:phase current-game)
+              :role-selection
+              (let [available-roles (:available-roles current-game)
+                    ;; Simple AI: pick a random available role
+                    role (rand-nth (vec available-roles))]
+                (handle-role-selection role))
 
-                 :role-execution
-                 (let [selected-role (:selected-role current-game)]
-                   (case selected-role
-                     :settler
-                     (let [available-plantations (keys (filter #(pos? (val %)) (:plantation-supply current-game)))
-                           plantation (rand-nth available-plantations)]
-                       (handle-plantation-choice plantation))
+              :role-execution
+              (let [selected-role (:selected-role current-game)]
+                (case selected-role
+                  :settler
+                  (let [available-plantations (keys (filter #(pos? (val %)) (:plantation-supply current-game)))
+                        plantation (rand-nth available-plantations)]
+                    (handle-plantation-choice plantation))
 
-                     :builder
-                     (let [executor-player (current-role-executor current-game)
-                           affordable-buildings (filter (fn [[building-key building-info]]
-                                                          (and (>= (:money executor-player) (:cost building-info))
-                                                               (pos? (get (:building-supply current-game) building-key 0))))
-                                                        state/buildings)]
-                       (if (seq affordable-buildings)
-                         (let [[building-key _] (rand-nth affordable-buildings)]
-                           (handle-building-choice building-key))
-                         (handle-skip-role :builder)))
+                  :builder
+                  (let [executor-player (current-role-executor current-game)
+                        affordable-buildings (filter (fn [[building-key building-info]]
+                                                       (and (>= (:money executor-player) (:cost building-info))
+                                                            (pos? (get (:building-supply current-game) building-key 0))))
+                                                     state/buildings)]
+                    (if (seq affordable-buildings)
+                      (let [[building-key _] (rand-nth affordable-buildings)]
+                        (handle-building-choice building-key))
+                      (handle-skip-role :builder)))
 
-                     (:trader :captain)
-                     (let [executor-player (current-role-executor current-game)
-                           available-goods (filter #(pos? (get-in executor-player [:goods %] 0))
-                                                   [:corn :indigo :sugar :tobacco :coffee])]
-                       (if (seq available-goods)
-                         (let [good (rand-nth available-goods)]
-                           (handle-good-choice good selected-role))
-                         (handle-skip-role selected-role)))
+                  (:trader :captain)
+                  (let [executor-player (current-role-executor current-game)
+                        available-goods (filter #(pos? (get-in executor-player [:goods %] 0))
+                                                [:corn :indigo :sugar :tobacco :coffee])]
+                    (if (seq available-goods)
+                      (let [good (rand-nth available-goods)]
+                        (handle-good-choice good selected-role))
+                      (handle-skip-role selected-role)))
 
-                     ;; For automatic roles, trigger automatic execution  
-                     (:mayor :craftsman)
-                     (handle-automatic-role-execution current-game)
+                  ;; For automatic roles, trigger automatic execution  
+                  (:mayor :craftsman)
+                  (handle-automatic-role-execution current-game)
 
-                     ;; For other roles, do nothing
-                     nil))))))
-         500)))))
+                  ;; For other roles, do nothing
+                  nil)))))))))
 
 (defn handle-automatic-role-execution [game-data]
   "Handle roles that don't require player choices (Mayor, Craftsman)"
@@ -204,8 +201,6 @@
     (when game-data
       (handle-ai-turn game-data))
     game-data))
-
- ; 1.5 second delay to show AI is "thinking"
 
 ;; Components
 (defn role-card [role available? gold-amount on-select]
@@ -302,9 +297,9 @@
 (defn role-execution-ui [game-data]
   (let [selected-role (:selected-role game-data)
         executor-player (current-role-executor game-data)]
-    ;; Auto-execute roles that don't require choices
+    ;; Auto-execute roles that don't require choices immediately
     (when (contains? #{:mayor :craftsman} selected-role)
-      (js/setTimeout #(handle-automatic-role-execution game-data) 100))
+      (handle-automatic-role-execution game-data))
 
     (case selected-role
       :settler [plantation-choice-ui game-data]
@@ -458,7 +453,13 @@
                (= (:phase game-data) :role-execution)
                [role-execution-ui game-data]
 
-               ;; Role selection phase
+;; Role selection phase - check if it's AI's turn
+               (and (= (:phase game-data) :role-selection) (:is-ai current-player-data))
+               [:div.ai-waiting
+                [:h2 "🤖 AI Turn"]
+                [:p (:name current-player-data) " is selecting a role..."]]
+
+               ;; Role selection phase - human player's turn
                :else
                [:div.roles-section
                 [:h2 "🎭 Available Roles"]
