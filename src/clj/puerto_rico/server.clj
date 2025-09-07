@@ -10,7 +10,7 @@
             [cheshire.core :as json]
             [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]
-            [puerto-rico.ai.mcts-fixed :as ai]))
+            [puerto-rico.ai.mcts :as ai]))
 
 ;; Game session storage (in production, use a proper database)
 (def game-sessions (atom {}))

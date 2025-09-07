@@ -140,7 +140,7 @@ bb ci                           # Full CI pipeline
 (demo/demo-human-vs-ai)
 
 ;; Test AI decisions
-(require '[puerto-rico.ai.mcts-fixed :as ai])
+(require '[puerto-rico.ai.mcts :as ai])
 (ai/ai-select-move game player-id :medium)
 ```
 

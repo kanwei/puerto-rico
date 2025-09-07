@@ -4,6 +4,9 @@
             [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]))
 
+;; Forward declaration for function used before definition
+(declare handle-automatic-role-execution game-state-watcher)
+
 ;; Simple game state atom for demo
 (defonce game-state (reagent/atom {:game-state nil}))
 
@@ -97,9 +100,6 @@
   "Get the player who is currently executing the role"
   (when-let [executor-idx (:role-execution-current-idx game-data)]
     (nth (:players game-data) executor-idx)))
-
-;; Forward declaration for function used before definition
-(declare handle-automatic-role-execution)
 
 ;; Game logic handlers
 
