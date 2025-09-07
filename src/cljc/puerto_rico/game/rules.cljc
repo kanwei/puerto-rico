@@ -14,8 +14,11 @@
                         (filter #(= (:id (second %)) player-id))
                         first
                         first)
+        player (get-in game-state [:players player-idx])
         face-up-plantations (:face-up-plantations game-state)
-        quarry-supply (:quarry-supply game-state)]
+        quarry-supply (:quarry-supply game-state)
+        ;; Check if player has occupied hospice
+        has-hospice (has-occupied-building? player :hospice)]
     (cond
       ;; Invalid parameters
       (not (and plantation-choice player-idx
@@ -26,9 +29,32 @@
       ;; Choosing a quarry
       (= plantation-choice :quarry)
       (if (pos? quarry-supply)
-        (-> game-state
-            (update-in [:players player-idx :plantations] conj {:type :quarry :colonists 0})
-            (update :quarry-supply dec))
+        (let [;; Add quarry to player's plantations
+              game-after-quarry (-> game-state
+                                    (update-in [:players player-idx :plantations]
+                                               conj {:type :quarry :colonists 0})
+                                    (update :quarry-supply dec))
+              ;; Apply hospice bonus if applicable
+              final-game (if has-hospice
+                           (let [colonist-supply (:colonist-supply game-after-quarry)
+                                 colonist-ship (:colonist-ship game-after-quarry)
+                                 plantation-count (count (get-in game-after-quarry [:players player-idx :plantations]))
+                                 new-plantation-idx (dec plantation-count)] ; Index of the quarry we just added
+                             (cond
+                               ;; Take colonist from supply
+                               (pos? colonist-supply)
+                               (-> game-after-quarry
+                                   (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
+                                   (update :colonist-supply dec))
+                               ;; Take colonist from ship
+                               (pos? colonist-ship)
+                               (-> game-after-quarry
+                                   (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
+                                   (update :colonist-ship dec))
+                               ;; No colonists available
+                               :else game-after-quarry))
+                           game-after-quarry)]
+          final-game)
         game-state)
 
       ;; Choosing from face-up plantations
@@ -49,12 +75,33 @@
             updated-players (assoc-in (:players game-state)
                                       [player-idx :plantations]
                                       (conj (get-in (:players game-state) [player-idx :plantations])
-                                            {:type plantation-choice :colonists 0}))]
-        ;; Return updated game state
-        (assoc game-state
-               :face-up-plantations new-face-up
-               :plantation-supply new-deck
-               :players updated-players))
+                                            {:type plantation-choice :colonists 0}))
+            ;; Basic game state after taking plantation
+            game-after-plantation (assoc game-state
+                                         :face-up-plantations new-face-up
+                                         :plantation-supply new-deck
+                                         :players updated-players)
+            ;; Apply hospice bonus if applicable
+            final-game (if has-hospice
+                         (let [colonist-supply (:colonist-supply game-after-plantation)
+                               colonist-ship (:colonist-ship game-after-plantation)
+                               plantation-count (count (get-in game-after-plantation [:players player-idx :plantations]))
+                               new-plantation-idx (dec plantation-count)] ; Index of the plantation we just added
+                           (cond
+                             ;; Take colonist from supply
+                             (pos? colonist-supply)
+                             (-> game-after-plantation
+                                 (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
+                                 (update :colonist-supply dec))
+                             ;; Take colonist from ship
+                             (pos? colonist-ship)
+                             (-> game-after-plantation
+                                 (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
+                                 (update :colonist-ship dec))
+                             ;; No colonists available
+                             :else game-after-plantation))
+                         game-after-plantation)]
+        final-game)
 
       ;; Invalid choice
       :else
