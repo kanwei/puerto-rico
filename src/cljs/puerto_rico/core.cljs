@@ -9,6 +9,9 @@
 
 (defonce game-log (reagent/atom []))
 
+;; State for viewing historical game states
+(defonce historical-view (reagent/atom {:active false :state-index nil}))
+
 ;; State for tracking AI action display  
 (defonce ai-action-display (reagent/atom {:show false :player "" :action ""}))
 
@@ -35,10 +38,36 @@
         turn-label (str round-num "." turn-num)
         entry {:turn turn-label
                :message message
-               :player player-name}]
+               :player player-name
+               :game-state-snapshot current-game ; Store the game state before this move
+               :timestamp (.getTime (js/Date.))}]
     (swap! game-log conj entry)
     ;; No limit - keep all entries to see start of game
     ))
+
+(defn view-historical-state [log-index]
+  "Switch to viewing a historical game state"
+  (swap! historical-view assoc :active true :state-index log-index))
+
+(defn return-to-current-state []
+  "Return to viewing the current game state"
+  (swap! historical-view assoc :active false :state-index nil))
+
+(defn get-display-game-state []
+  "Get the game state that should be displayed (current or historical)"
+  (if (:active @historical-view)
+    ;; Return historical state
+    (let [log-index (:state-index @historical-view)
+          log-entries @game-log]
+      (if (and log-index (< log-index (count log-entries)))
+        {:game-state (:game-state-snapshot (nth log-entries log-index))
+         :historical true
+         :log-index log-index}
+        @game-state))
+    ;; Return current state with AI automation
+    (let [game-data (game-state-watcher)]
+      {:game-state game-data
+       :historical false})))
 
 (defn clear-log []
   (reset! game-log []))
@@ -657,13 +686,21 @@
 
 (defn game-log-ui []
   [:div.game-log
-   [:h3 "📜 Game Log"]
+   [:h3 "📜 Game Log"
+    (when (:active @historical-view)
+      [:span.historical-indicator
+       " (Viewing Historical State - "
+       [:button.back-to-current {:on-click return-to-current-state}
+        "Back to Current"]
+       ")"])]
    [:div.log-entries
     (if (seq @game-log)
       ;; Show all entries in chronological order (oldest first)
       (for [[idx entry] (map-indexed vector @game-log)]
         ^{:key idx}
         [:div.log-entry
+         {:class (when (= idx (:state-index @historical-view)) "selected")
+          :on-click #(view-historical-state idx)}
          [:span.turn-number (:turn entry)]
          (when (:player entry)
            [:span.player (:player entry) ":"])
@@ -759,15 +796,21 @@
        "AI vs AI"]]]))
 
 (defn game-board []
-  (let [game-data (game-state-watcher)]
+  (let [display-state (get-display-game-state)
+        game-data (:game-state display-state)
+        is-historical (:historical display-state)]
     (cond
       ;; Normal game display (including game over overlay)
       game-data
       (let [current-player-data (current-player game-data)]
         [:div.game-board-compact
-         ;; Game over overlay (if game is over)
+         ;; Historical state indicator
+         (when is-historical
+           [:div.historical-banner
+            "📊 Viewing Historical State - Log Entry #" (:log-index display-state)])
 
-;; Compact header bar
+         ;; Game over overlay (if game is over)
+         ;; Compact header bar
          [:div.header-bar
           [:h2 "🏝️ Puerto Rico"]
           [:div.game-status
@@ -790,46 +833,56 @@
          ;; Main action area and common area side by side
          [:div.main-area
           [:div.action-area
-           (let [executor (current-role-executor game-data)
-                 ;; Determine if we need to show AI button
-                 ai-player (cond
-                             ;; Role execution phase - check if executor is AI
-                             (= (:phase game-data) :role-execution)
-                             (when (:is-ai executor) executor)
-                             ;; Role selection phase - check if current player is AI
-                             (= (:phase game-data) :role-selection)
-                             (when (:is-ai current-player-data) current-player-data)
-                             ;; Default
-                             :else nil)]
-             (cond
-;; Show game over screen in main pane
-               (:game-over game-data)
-               [game-over-main-pane game-data]
+           (cond
+            ;; Show game over screen in main pane
+             (:game-over game-data)
+             [game-over-main-pane game-data]
 
+            ;; Historical state - just show static info
+             is-historical
+             [:div.historical-view
+              [:h3 "📊 Historical Game State"]
+              [:p "This is the game state before the selected log entry was executed."]
+              [:p "Game interactions are disabled in historical view."]]
+
+            ;; Current state - show interactive elements
+             :else
+             (let [executor (current-role-executor game-data)
+                  ;; Determine if we need to show AI button
+                   ai-player (cond
+                              ;; Role execution phase - check if executor is AI
+                               (= (:phase game-data) :role-execution)
+                               (when (:is-ai executor) executor)
+                              ;; Role selection phase - check if current player is AI
+                               (= (:phase game-data) :role-selection)
+                               (when (:is-ai current-player-data) current-player-data)
+                              ;; Default
+                               :else nil)]
+               (cond
                ;; Auto-execute AI turns with visual feedback
-               ai-player
-               (let [ai-display @ai-action-display]
-                 (if (:show ai-display)
-                   [:div.ai-action-display
-                    [:h3 "🤖 " (:player ai-display)]
-                    [:p (:action ai-display)]]
-                   [:div.waiting
-                    [:h3 "⏳ AI Processing"]
-                    [:p (:name ai-player) " is making a decision..."]]))
+                 ai-player
+                 (let [ai-display @ai-action-display]
+                   (if (:show ai-display)
+                     [:div.ai-action-display
+                      [:h3 "🤖 " (:player ai-display)]
+                      [:p (:action ai-display)]]
+                     [:div.waiting
+                      [:h3 "⏳ AI Processing"]
+                      [:p (:name ai-player) " is making a decision..."]]))
 
                ;; Role execution phase - human turn
-               (= (:phase game-data) :role-execution)
-               [role-execution-ui game-data]
+                 (= (:phase game-data) :role-execution)
+                 [role-execution-ui game-data]
 
                ;; Role selection phase - human turn
-               :else
-               [:div.roles-section-compact
-                [:h3 "🎭 Available Roles"]
-                [:div.roles-grid-compact
-                 (for [role state/roles]
-                   (let [available? (contains? (:available-roles game-data) role)
-                         gold-amount (get-in game-data [:role-gold role] 0)]
-                     ^{:key role} [role-card role available? gold-amount handle-role-selection]))]]))]
+                 :else
+                 [:div.roles-section-compact
+                  [:h3 "🎭 Available Roles"]
+                  [:div.roles-grid-compact
+                   (for [role state/roles]
+                     (let [available? (contains? (:available-roles game-data) role)
+                           gold-amount (get-in game-data [:role-gold role] 0)]
+                       ^{:key role} [role-card role available? gold-amount handle-role-selection]))]])))]
 
           [:div.sidebar
            [common-area game-data]
