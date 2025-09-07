@@ -208,10 +208,14 @@
  ; 1.5 second delay to show AI is "thinking"
 
 ;; Components
-(defn role-card [role available? on-select]
+(defn role-card [role available? gold-amount on-select]
   [:div.role-card {:class (when-not available? "disabled")
                    :on-click (when available? #(on-select role))}
    [:h3 (name role)]
+   (when (and gold-amount (> gold-amount 0))
+     [:div.gold-coins
+      [:span.gold-icon "💰"]
+      [:span.gold-amount gold-amount]])
    [:p (case role
          :settler "Take a plantation"
          :mayor "Get colonists"
@@ -427,6 +431,7 @@
          [:div.game-info
           [:p "📅 Round: " (:round game-data)]
           [:p "⚡ Phase: " (name (:phase game-data))]
+          [:p "👑 Governor: " (:name (state/current-governor game-data))]
           [:p "👤 Current Player: " (:name current-player-data)]
           (let [ai-player (if (= (:phase game-data) :role-execution)
                             (current-role-executor game-data)
@@ -459,7 +464,7 @@
                 [:h2 "🎭 Available Roles"]
                 [:div.roles-grid
                  (for [role (:available-roles game-data)]
-                   ^{:key role} [role-card role true handle-role-selection])]]))
+                   ^{:key role} [role-card role true (get-in game-data [:role-gold role] 0) handle-role-selection])]]))
 
            [common-area game-data]]
 

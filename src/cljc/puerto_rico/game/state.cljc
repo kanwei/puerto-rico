@@ -97,6 +97,7 @@
   [players]
   {:players players
    :current-player-idx 0
+   :governor-idx 0 ;; Track who is the governor
    :round 1
    :phase :role-selection
    :selected-role nil
@@ -105,6 +106,10 @@
    :role-execution-current-idx nil
    :available-roles (set roles)
    :used-roles #{}
+   ;; Track gold coins on each role card
+   :role-gold (into {} (map #(vector % 0) roles))
+   ;; Track how many players have selected roles this round
+   :players-selected-this-round 0
    :plantation-supply plantation-tiles
    :goods-supply {:corn 10 :indigo 11 :sugar 11 :tobacco 9 :coffee 9}
    :colonist-supply 95
@@ -120,6 +125,9 @@
 ;; Game state accessors
 (defn current-player [game-state]
   (get-in game-state [:players (:current-player-idx game-state)]))
+
+(defn current-governor [game-state]
+  (get-in game-state [:players (:governor-idx game-state)]))
 
 (defn player-by-id [game-state player-id]
   (->> (:players game-state)

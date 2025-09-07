@@ -3,7 +3,7 @@
   (:require [puerto-rico.game.state :as state]))
 
 ;; Forward declarations
-(declare end-role-execution end-round execute-role)
+(declare end-role-execution execute-role)
 
 ;; Role execution functions
 
@@ -146,17 +146,58 @@
                             (map-indexed vector)
                             (filter #(= (:id (second %)) player-id))
                             first
-                            first)]
+                            first)
+          ;; Give player any gold coins on the selected role
+          gold-on-role (get-in game-state [:role-gold role] 0)
+          game-with-gold (if (> gold-on-role 0)
+                           (-> game-state
+                               (update-in [:players selector-idx :money] + gold-on-role)
+                               (assoc-in [:role-gold role] 0))
+                           game-state)
+          ;; Increment the counter of players who have selected this round
+          game-with-counter (update game-with-gold :players-selected-this-round inc)]
       (if (= role :prospector)
         ;; Prospector is privilege-only: only selector gets benefit, then next role selection
-        (-> game-state
-            (update-in [:players selector-idx :money] inc)
-            (update :available-roles disj role)
-            (update :used-roles conj role)
-            (assoc :current-player-idx (state/next-player-idx game-state)))
+        (let [game-after-prospector (-> game-with-counter
+                                        (update-in [:players selector-idx :money] inc)
+                                        (update :available-roles disj role)
+                                        (update :used-roles conj role)
+                                        (assoc :current-player-idx (state/next-player-idx game-state)))
+              players-selected (:players-selected-this-round game-after-prospector)
+              num-players (count (:players game-after-prospector))]
+          ;; Check if round should end after prospector (each player has selected)
+          (if (>= players-selected num-players)
+            ;; Round is complete, start new round
+            (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-prospector))]
+              (-> game-after-prospector
+                  (update :round inc)
+                  (assoc :available-roles (set state/roles))
+                  (assoc :used-roles #{})
+                  ;; Add gold to unpicked roles BEFORE starting new round
+                  (update :role-gold (fn [role-gold]
+                                       (reduce (fn [rg role]
+                                                 (update rg role inc))
+                                               role-gold
+                                               unpicked-roles)))
+                  ;; Rotate governor to next player  
+                  (assoc :governor-idx (mod (inc (:governor-idx game-after-prospector)) num-players))
+                  (assoc :current-player-idx (mod (inc (:governor-idx game-after-prospector)) num-players))
+                  (assoc :players-selected-this-round 0)
+                  (assoc :phase :role-selection)
+                  ;; Clear trading house
+                  (assoc :trading-house [])
+                  ;; Reset ships if full
+                  (update :ships (fn [ships]
+                                   (mapv (fn [ship]
+                                           (if (= (:amount ship) (:capacity ship))
+                                             (assoc ship :good nil :amount 0)
+                                             ship))
+                                         ships)))))
+            ;; Round continues
+            game-after-prospector))
         ;; All other roles: all players execute in turn order
         (let [execution-order (state/create-role-execution-order game-state selector-idx)]
-          (-> game-state
+          (-> game-with-counter
               (assoc :selected-role role)
               (assoc :role-selector-idx selector-idx)
               (assoc :role-execution-order execution-order)
@@ -173,14 +214,46 @@
         current-position (.indexOf execution-order current-idx)
         next-position (inc current-position)]
     (if (>= next-position (count execution-order))
-      ;; All players have executed the role, move to next role selection
-      (-> game-state
-          (assoc :phase :role-selection)
-          (assoc :selected-role nil)
-          (assoc :role-selector-idx nil)
-          (assoc :role-execution-order nil)
-          (assoc :role-execution-current-idx nil)
-          (assoc :current-player-idx (state/next-player-idx game-state)))
+      ;; All players have executed the role, back to role selection
+      (let [game-after-role (-> game-state
+                                (assoc :phase :role-selection)
+                                (assoc :selected-role nil)
+                                (assoc :role-selector-idx nil)
+                                (assoc :role-execution-order nil)
+                                (assoc :role-execution-current-idx nil)
+                                (assoc :current-player-idx (state/next-player-idx game-state)))
+            players-selected (:players-selected-this-round game-after-role)
+            num-players (count (:players game-after-role))]
+        ;; Check if round should end (each player has selected a role)
+        (if (>= players-selected num-players)
+          ;; Round is complete, start new round
+          (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))]
+            (-> game-after-role
+                (update :round inc)
+                (assoc :available-roles (set state/roles))
+                (assoc :used-roles #{})
+                ;; Add gold to unpicked roles BEFORE starting new round
+                (update :role-gold (fn [role-gold]
+                                     (reduce (fn [rg role]
+                                               (update rg role inc))
+                                             role-gold
+                                             unpicked-roles)))
+                ;; Rotate governor to next player
+                (assoc :governor-idx (mod (inc (:governor-idx game-after-role)) num-players))
+                (assoc :current-player-idx (mod (inc (:governor-idx game-after-role)) num-players)) ;; Governor goes first
+                (assoc :players-selected-this-round 0)
+                (assoc :phase :role-selection)
+                ;; Clear trading house
+                (assoc :trading-house [])
+                ;; Reset ships if full
+                (update :ships (fn [ships]
+                                 (mapv (fn [ship]
+                                         (if (= (:amount ship) (:capacity ship))
+                                           (assoc ship :good nil :amount 0)
+                                           ship))
+                                       ships)))))
+          ;; Round continues with next player
+          game-after-role))
       ;; Move to next player in execution order
       (assoc game-state :role-execution-current-idx (nth execution-order next-position)))))
 
@@ -205,26 +278,7 @@
       (assoc :role-player-idx nil)
       (assoc :phase :role-selection)))
 
-(defn end-round [game-state]
-  "End current round and prepare for next"
-  (let [all-roles-used? (= (count (:used-roles game-state)) (count state/roles))]
-    (if all-roles-used?
-      (-> game-state
-          (update :round inc)
-          (assoc :available-roles (set state/roles))
-          (assoc :used-roles #{})
-          (assoc :current-player-idx 0)
-          (assoc :phase :role-selection)
-          ;; Clear trading house
-          (assoc :trading-house [])
-          ;; Reset ships if full
-          (update :ships (fn [ships]
-                           (mapv (fn [ship]
-                                   (if (= (:amount ship) (:capacity ship))
-                                     (assoc ship :good nil :amount 0)
-                                     ship))
-                                 ships))))
-      (state/advance-to-next-player game-state))))
+; This function is no longer needed - round ending logic moved to advance-role-execution
 
 ;; Game validation functions
 (defn valid-move? [game-state player-id move]
@@ -242,6 +296,5 @@
   (case (:type move)
     :select-role (select-role game-state (:player-id move) (:role move))
     :role-action (-> (execute-role game-state (:role move) (:player-id move) (:args move))
-                     (end-role-execution)
-                     (end-round))
+                     (advance-role-execution))
     game-state))
