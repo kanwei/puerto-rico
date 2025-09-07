@@ -519,6 +519,7 @@
    [:h3 "📜 Game Log"]
    [:div.log-entries
     (if (seq @game-log)
+      ;; Show all entries in reverse chronological order (most recent first)
       (for [[idx entry] (map-indexed vector (reverse @game-log))]
         ^{:key idx}
         [:div.log-entry
@@ -591,17 +592,7 @@
 
           [:div.sidebar
            [common-area game-data]
-           [:div.log-compact
-            [:h4 "📜 Recent"]
-            [:div.log-entries-mini
-             (if (seq @game-log)
-               (for [[idx entry] (map-indexed vector (take 3 (reverse @game-log)))]
-                 ^{:key idx}
-                 [:div.log-entry-mini
-                  (when (:player entry)
-                    [:span.player-mini (:player entry) ": "])
-                  [:span.message-mini (:message entry)]])
-               [:div.log-empty-mini "No events yet..."])]]]]])
+           [game-log-ui]]]])
       [:div.no-game
        [:h1 "🏝️ Puerto Rico"]
        [:p "Welcome to the Puerto Rico board game!"]
