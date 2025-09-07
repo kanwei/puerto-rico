@@ -316,6 +316,31 @@ h2 {
     background: linear-gradient(135deg, #1565c0, #0d47a1);
 }
 
+/* AI Waiting State */
+.ai-waiting {
+    background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+    border: 3px solid #1976d2;
+    border-radius: 12px;
+    padding: 30px 20px;
+    text-align: center;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    margin-bottom: 20px;
+}
+
+.ai-waiting h2 {
+    color: #1976d2;
+    margin-top: 0;
+    font-size: 1.8em;
+    margin-bottom: 15px;
+}
+
+.ai-waiting p {
+    color: #1976d2;
+    font-size: 1.2em;
+    margin: 0;
+    font-weight: 500;
+}
+
 /* Role Execution UI */
 .role-execution {
     background: linear-gradient(135deg, #fff3cd, #ffeaa7);
@@ -364,6 +389,25 @@ h2 {
     box-shadow: 0 4px 12px rgba(0,0,0,0.2);
     border-color: #FFD700;
     background: linear-gradient(135deg, #fffef7, #fefdf0);
+}
+
+.choice-card.skip {
+    background: linear-gradient(135deg, #f8d7da, #f5c6cb);
+    border-color: #dc3545;
+    color: #721c24;
+}
+
+.choice-card.skip:hover {
+    background: linear-gradient(135deg, #f5c6cb, #f1b0b7);
+    border-color: #c82333;
+}
+
+.choice-card.skip h3 {
+    color: #721c24;
+}
+
+.choice-card.skip p {
+    color: #856404;
 }
 
 .choice-card h3 {

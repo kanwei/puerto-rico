@@ -59,45 +59,65 @@
 
 ;; Role execution handlers
 (defn handle-plantation-choice [plantation-type]
-  (let [current-game (:game-state @game-state)
-        executor-player (current-role-executor current-game)
-        player-id (:id executor-player)]
+  (let [current-game (:game-state @game-state)]
     (when current-game
-      (let [new-game-state (-> current-game
-                               (rules/execute-role :settler player-id plantation-type)
-                               (rules/advance-role-execution))]
-        (add-log-entry (str "🌱 Took " (name plantation-type) " plantation") (:name executor-player))
-        (swap! game-state assoc :game-state new-game-state)
-        (js/console.log "Plantation chosen:" plantation-type "New game state:" new-game-state)))))
+      (let [executor-player (current-role-executor current-game)
+            player-id (:id executor-player)]
+        (when (and executor-player player-id)
+          (let [new-game-state (-> current-game
+                                   (rules/execute-role :settler player-id plantation-type)
+                                   (rules/advance-role-execution))]
+            (add-log-entry (str "🌱 Took " (name plantation-type) " plantation") (:name executor-player))
+            (swap! game-state assoc :game-state new-game-state)
+            (js/console.log "Plantation chosen:" plantation-type "for player:" (:name executor-player) "New game state:" new-game-state)))))))
 
 (defn handle-building-choice [building-key]
-  (let [current-game (:game-state @game-state)
-        executor-player (current-role-executor current-game)
-        player-id (:id executor-player)]
+  (let [current-game (:game-state @game-state)]
     (when current-game
-      (let [building-info (get state/buildings building-key)
-            new-game-state (-> current-game
-                               (rules/execute-role :builder player-id building-key)
-                               (rules/advance-role-execution))]
-        (add-log-entry (str "🏗️ Built " (name building-key) " for $" (:cost building-info)) (:name executor-player))
-        (swap! game-state assoc :game-state new-game-state)
-        (js/console.log "Building chosen:" building-key "New game state:" new-game-state)))))
+      (let [executor-player (current-role-executor current-game)
+            player-id (:id executor-player)]
+        (when (and executor-player player-id)
+          (let [building-info (get state/buildings building-key)
+                new-game-state (-> current-game
+                                   (rules/execute-role :builder player-id building-key)
+                                   (rules/advance-role-execution))]
+            (add-log-entry (str "🏗️ Built " (name building-key) " for $" (:cost building-info)) (:name executor-player))
+            (swap! game-state assoc :game-state new-game-state)
+            (js/console.log "Building chosen:" building-key "for player:" (:name executor-player) "New game state:" new-game-state)))))))
 
 (defn handle-good-choice [good-type role]
-  (let [current-game (:game-state @game-state)
-        executor-player (current-role-executor current-game)
-        player-id (:id executor-player)]
+  (let [current-game (:game-state @game-state)]
     (when current-game
-      (let [new-game-state (-> current-game
-                               (rules/execute-role role player-id good-type)
-                               (rules/advance-role-execution))
-            action-text (case role
-                          :trader "💰 Sold"
-                          :captain "🚢 Shipped"
-                          "Used")]
-        (add-log-entry (str action-text " " (name good-type)) (:name executor-player))
-        (swap! game-state assoc :game-state new-game-state)
-        (js/console.log "Good chosen:" good-type "for role:" role "New game state:" new-game-state)))))
+      (let [executor-player (current-role-executor current-game)
+            player-id (:id executor-player)]
+        (when (and executor-player player-id)
+          (let [new-game-state (-> current-game
+                                   (rules/execute-role role player-id good-type)
+                                   (rules/advance-role-execution))
+                action-text (case role
+                              :trader "💰 Sold"
+                              :captain "🚢 Shipped"
+                              "Used")]
+            (add-log-entry (str action-text " " (name good-type)) (:name executor-player))
+            (swap! game-state assoc :game-state new-game-state)
+            (js/console.log "Good chosen:" good-type "for role:" role "for player:" (:name executor-player) "New game state:" new-game-state)))))))
+
+(defn handle-skip-role [role]
+  (let [current-game (:game-state @game-state)]
+    (when current-game
+      (let [executor-player (current-role-executor current-game)
+            player-id (:id executor-player)]
+        (when (and executor-player player-id)
+          (let [new-game-state (rules/advance-role-execution current-game)
+                action-text (case role
+                              :trader "💼 Skipped trading (no goods)"
+                              :captain "⛵ Skipped shipping (no goods)"
+                              :builder "🔨 Skipped building (can't afford)"
+                              :settler "🚫 Skipped settler (no plantations)"
+                              "⏭️ Skipped")]
+            (add-log-entry action-text (:name executor-player))
+            (swap! game-state assoc :game-state new-game-state)
+            (js/console.log "Player skipped role:" role "for player:" (:name executor-player))))))))
 
 ;; AI turn handling
 (defn handle-ai-turn [game-data]
@@ -131,20 +151,24 @@
                        (handle-plantation-choice plantation))
 
                      :builder
-                     (let [affordable-buildings (filter (fn [[building-key building-info]]
-                                                          (and (>= (:money current-player-data) (:cost building-info))
+                     (let [executor-player (current-role-executor current-game)
+                           affordable-buildings (filter (fn [[building-key building-info]]
+                                                          (and (>= (:money executor-player) (:cost building-info))
                                                                (pos? (get (:building-supply current-game) building-key 0))))
                                                         state/buildings)]
-                       (when (seq affordable-buildings)
+                       (if (seq affordable-buildings)
                          (let [[building-key _] (rand-nth affordable-buildings)]
-                           (handle-building-choice building-key))))
+                           (handle-building-choice building-key))
+                         (handle-skip-role :builder)))
 
                      (:trader :captain)
-                     (let [available-goods (filter #(pos? (get-in current-player-data [:goods %] 0))
+                     (let [executor-player (current-role-executor current-game)
+                           available-goods (filter #(pos? (get-in executor-player [:goods %] 0))
                                                    [:corn :indigo :sugar :tobacco :coffee])]
-                       (when (seq available-goods)
+                       (if (seq available-goods)
                          (let [good (rand-nth available-goods)]
-                           (handle-good-choice good selected-role))))
+                           (handle-good-choice good selected-role))
+                         (handle-skip-role selected-role)))
 
                      ;; For other roles, do nothing (they execute automatically)
                      nil))))))
@@ -195,16 +219,25 @@
          "Choose this role")]])
 
 (defn plantation-choice-ui [game-data]
-  (let [available-plantations (filter #(pos? (val %)) (:plantation-supply game-data))]
+  (let [available-plantations (filter #(pos? (val %)) (:plantation-supply game-data))
+        current-player-data (current-role-executor game-data)]
     [:div.role-execution
      [:h2 "🌱 Settler - Choose a Plantation"]
-     [:p "Select a plantation tile to place on your island:"]
-     [:div.choice-grid
-      (for [[plantation-type count] available-plantations]
-        ^{:key plantation-type}
-        [:div.choice-card {:on-click #(handle-plantation-choice plantation-type)}
-         [:h3 (name plantation-type)]
-         [:p "Available: " count]])]]))
+     (if (seq available-plantations)
+       [:div
+        [:p "Select a plantation tile to place on your island:"]
+        [:div.choice-grid
+         (for [[plantation-type count] available-plantations]
+           ^{:key plantation-type}
+           [:div.choice-card {:on-click #(handle-plantation-choice plantation-type)}
+            [:h3 (name plantation-type)]
+            [:p "Available: " count]])]]
+       [:div
+        [:p "No plantation tiles available."]
+        [:div.choice-grid
+         [:div.choice-card.skip {:on-click #(handle-skip-role :settler)}
+          [:h3 "Skip"]
+          [:p "No plantations left"]]]])]))
 
 (defn building-choice-ui [game-data]
   (let [current-player-data (current-role-executor game-data)
@@ -214,15 +247,23 @@
                                      state/buildings)]
     [:div.role-execution
      [:h2 "🏗️ Builder - Choose a Building"]
-     [:p "Select a building to construct (You have $" (:money current-player-data) "):"]
-     [:div.choice-grid
-      (for [[building-key building-info] affordable-buildings]
-        ^{:key building-key}
-        [:div.choice-card {:on-click #(handle-building-choice building-key)}
-         [:h3 (name building-key)]
-         [:p "Cost: $" (:cost building-info)]
-         [:p "VP: " (:vp building-info)]
-         [:p "Available: " (get (:building-supply game-data) building-key 0)]])]]))
+     (if (seq affordable-buildings)
+       [:div
+        [:p "Select a building to construct (You have $" (:money current-player-data) "):"]
+        [:div.choice-grid
+         (for [[building-key building-info] affordable-buildings]
+           ^{:key building-key}
+           [:div.choice-card {:on-click #(handle-building-choice building-key)}
+            [:h3 (name building-key)]
+            [:p "Cost: $" (:cost building-info)]
+            [:p "VP: " (:vp building-info)]
+            [:p "Available: " (get (:building-supply game-data) building-key 0)]])]]
+       [:div
+        [:p (:name current-player-data) " cannot afford any buildings (You have $" (:money current-player-data) ")."]
+        [:div.choice-grid
+         [:div.choice-card.skip {:on-click #(handle-skip-role :builder)}
+          [:h3 "Skip"]
+          [:p "Can't afford buildings"]]]])]))
 
 (defn good-choice-ui [game-data role]
   (let [current-player-data (current-role-executor game-data)
@@ -233,13 +274,22 @@
                 "Choose a Good")]
     [:div.role-execution
      [:h2 "📦 " title]
-     [:p "Select a good from your inventory:"]
-     [:div.choice-grid
-      (for [good-type available-goods]
-        ^{:key good-type}
-        [:div.choice-card {:on-click #(handle-good-choice good-type role)}
-         [:h3 (name good-type)]
-         [:p "You have: " (get-in current-player-data [:goods good-type] 0)]])]]))
+     (if (seq available-goods)
+       [:div
+        [:p "Select a good from your inventory:"]
+        [:div.choice-grid
+         (for [good-type available-goods]
+           ^{:key good-type}
+           [:div.choice-card {:on-click #(handle-good-choice good-type role)}
+            [:h3 (name good-type)]
+            [:p "You have: " (get-in current-player-data [:goods good-type] 0)]])]]
+       [:div
+        [:p (:name current-player-data) " has no goods to "
+         (case role :trader "sell" :captain "ship" "use") "."]
+        [:div.choice-grid
+         [:div.choice-card.skip {:on-click #(handle-skip-role role)}
+          [:h3 "Skip"]
+          [:p "No goods available"]]]])]))
 
 (defn role-execution-ui [game-data]
   (let [selected-role (:selected-role game-data)
@@ -387,13 +437,25 @@
 
          [:div.main-content
           [:div.left-column
-           (if (= (:phase game-data) :role-execution)
-             [role-execution-ui game-data]
-             [:div.roles-section
-              [:h2 "🎭 Available Roles"]
-              [:div.roles-grid
-               (for [role (:available-roles game-data)]
-                 ^{:key role} [role-card role true handle-role-selection])]])
+           (let [executor (current-role-executor game-data)]
+             (cond
+               ;; Role execution phase - check if it's AI's turn
+               (and (= (:phase game-data) :role-execution) (:is-ai executor))
+               [:div.ai-waiting
+                [:h2 "🤖 AI Turn"]
+                [:p (:name executor) " is executing " (name (:selected-role game-data))]]
+
+               ;; Role execution phase - human player's turn
+               (= (:phase game-data) :role-execution)
+               [role-execution-ui game-data]
+
+               ;; Role selection phase
+               :else
+               [:div.roles-section
+                [:h2 "🎭 Available Roles"]
+                [:div.roles-grid
+                 (for [role (:available-roles game-data)]
+                   ^{:key role} [role-card role true handle-role-selection])]]))
 
            [common-area game-data]]
 
