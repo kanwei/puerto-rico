@@ -656,51 +656,64 @@
 
 (defn apply-storage-rules [game-state]
   "Apply storage rules at end of captain phase - players must discard excess goods"
-  (update game-state :players
-          (fn [players]
-            (mapv (fn [player]
-                    (let [current-goods (:goods player)
-                          goods-with-amounts (filter #(pos? (second %)) current-goods)
-                          goods-types-count (count goods-with-amounts)
-                          max-storable-types (calculate-warehouse-storage player)
-                          has-no-warehouses (and (not (has-occupied-building? player :small-warehouse))
-                                                 (not (has-occupied-building? player :large-warehouse)))]
-                      (cond
-                        ;; Player can store all their goods types
-                        (<= goods-types-count max-storable-types)
-                        (if (and has-no-warehouses (> goods-types-count 1))
-                          ;; Special case: no warehouses but multiple types - keep only 1 good total
-                          (let [goods-priority {:coffee 5 :tobacco 4 :sugar 3 :indigo 2 :corn 1}
-                                best-good-type (first (sort-by #(get goods-priority % 0) >
-                                                               (map first goods-with-amounts)))
-                                new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
-                                                 {best-good-type 1})]
-                            (assoc player :goods new-goods))
-                          ;; With warehouses or only one type: keep all goods of allowed types
-                          (if (and has-no-warehouses (= goods-types-count 1))
-                            ;; No warehouses, one type: keep only 1 good of that type
-                            (let [[good-type _] (first goods-with-amounts)
-                                  new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
-                                                   {good-type 1})]
-                              (assoc player :goods new-goods))
-                            ;; Has warehouses: keep all goods of the types
-                            player))
+  (let [total-discarded (atom {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0})]
+    (-> game-state
+        (update :players
+                (fn [players]
+                  (mapv (fn [player]
+                          (let [current-goods (:goods player)
+                                goods-with-amounts (filter #(pos? (second %)) current-goods)
+                                goods-types-count (count goods-with-amounts)
+                                max-storable-types (calculate-warehouse-storage player)
+                                has-no-warehouses (and (not (has-occupied-building? player :small-warehouse))
+                                                       (not (has-occupied-building? player :large-warehouse)))]
+                            (cond
+                              ;; Player can store all their goods types
+                              (<= goods-types-count max-storable-types)
+                              (if (and has-no-warehouses (> goods-types-count 1))
+                                ;; Special case: no warehouses but multiple types - keep only 1 good total
+                                (let [goods-priority {:coffee 5 :tobacco 4 :sugar 3 :indigo 2 :corn 1}
+                                      best-good-type (first (sort-by #(get goods-priority % 0) >
+                                                                     (map first goods-with-amounts)))
+                                      new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
+                                                       {best-good-type 1})
+                                      discarded (merge-with - current-goods new-goods)]
+                                  ;; Track what was discarded
+                                  (swap! total-discarded #(merge-with + % discarded))
+                                  (assoc player :goods new-goods))
+                                ;; With warehouses or only one type: keep all goods of allowed types
+                                (if (and has-no-warehouses (= goods-types-count 1))
+                                  ;; No warehouses, one type: keep only 1 good of that type
+                                  (let [[good-type _] (first goods-with-amounts)
+                                        new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
+                                                         {good-type 1})
+                                        discarded (merge-with - current-goods new-goods)]
+                                    ;; Track what was discarded
+                                    (swap! total-discarded #(merge-with + % discarded))
+                                    (assoc player :goods new-goods))
+                                  ;; Has warehouses: keep all goods of the types
+                                  player))
 
-                        ;; Player has too many types - must choose which types to keep  
-                        :else
-                        (let [goods-priority {:coffee 5 :tobacco 4 :sugar 3 :indigo 2 :corn 1}
-                              sorted-goods (sort-by #(get goods-priority (first %) 0) > goods-with-amounts)
-                              goods-to-keep (take max-storable-types sorted-goods)
-                              ;; For no warehouses, keep only 1 good of the best type
-                              final-goods (if has-no-warehouses
-                                            (let [[best-type _] (first goods-to-keep)]
-                                              {best-type 1})
-                                            ;; With warehouses, keep all goods of the selected types
-                                            (into {} goods-to-keep))
-                              new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
-                                               final-goods)]
-                          (assoc player :goods new-goods)))))
-                  players))))
+                              ;; Player has too many types - must choose which types to keep  
+                              :else
+                              (let [goods-priority {:coffee 5 :tobacco 4 :sugar 3 :indigo 2 :corn 1}
+                                    sorted-goods (sort-by #(get goods-priority (first %) 0) > goods-with-amounts)
+                                    goods-to-keep (take max-storable-types sorted-goods)
+                                    ;; For no warehouses, keep only 1 good of the best type
+                                    final-goods (if has-no-warehouses
+                                                  (let [[best-type _] (first goods-to-keep)]
+                                                    {best-type 1})
+                                                  ;; With warehouses, keep all goods of the selected types
+                                                  (into {} goods-to-keep))
+                                    new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
+                                                     final-goods)
+                                    discarded (merge-with - current-goods new-goods)]
+                                ;; Track what was discarded
+                                (swap! total-discarded #(merge-with + % discarded))
+                                (assoc player :goods new-goods)))))
+                        players)))
+        ;; Return discarded goods to supply
+        (update :goods-supply #(merge-with + % @total-discarded)))))
 
 (defn advance-role-execution [game-state]
   "Move to the next player in role execution order, or end role if all players have executed"
