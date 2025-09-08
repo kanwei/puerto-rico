@@ -310,7 +310,8 @@
 
 (defn handle-automatic-role-execution [game-data]
   "Automatically execute roles that don't require choices"
-  (let [current-role (:selected-role game-data)]
+  (let [current-role (:selected-role game-data)
+        executor (current-role-executor game-data)]
     (case current-role
       :mayor
       (do
@@ -323,10 +324,12 @@
         (swap! game-state update :game-state rules/advance-role-execution))
 
       :prospector
-      ;; Prospector requires no choices from any player
-      (let [executor (current-role-executor game-data)
-            updated-game (rules/execute-role game-data :prospector (:id executor))]
-        (swap! game-state assoc :game-state (rules/advance-role-execution updated-game)))
+      ;; Execute prospector for current player and advance immediately
+      (do
+        (swap! game-state assoc :game-state
+               (-> game-data
+                   (rules/execute-role :prospector (:id executor))
+                   rules/advance-role-execution)))
 
       ;; Other roles require player choices
       nil)))
@@ -503,6 +506,16 @@
                   (js/setTimeout #(do
                                     (reset! ai-action-display {:show false :player "" :action ""})
                                     (handle-skip-role :captain)) 250))))
+
+            :prospector
+            ;; Prospector auto-executes - only selector gets 1 gold
+            (let []
+              (reset! ai-action-display {:show true :player (:name executor-player)
+                                         :action "Gained 1 doubloon from Prospector"})
+              (add-log-entry "Gained 1 doubloon from Prospector" (:name executor-player))
+              (js/setTimeout #(do
+                                (reset! ai-action-display {:show false :player "" :action ""})
+                                (handle-automatic-role-execution game-data)) 250))
 
             (:mayor :craftsman)
             (let []
