@@ -863,7 +863,7 @@
           ^{:key (:id player)}
           [:tr {:class (when (= player winner) "winner-row")}
            [:td.player-name (:name player)]
-           [:td.ship-points (get-in player [:vp-breakdown :ship-vps])]
+           [:td.ship-points (get-in player [:vp-breakdown :shipping-vps])]
            [:td.building-points (get-in player [:vp-breakdown :building-vps])]
            [:td.total-points (get-in player [:vp-breakdown :total-vps])]])]]]
 
