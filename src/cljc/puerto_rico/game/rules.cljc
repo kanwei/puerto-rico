@@ -629,62 +629,17 @@
                                (assoc-in [:role-gold role] 0))
                            game-state)
           ;; Increment the counter of players who have selected this round
-          game-with-counter (update game-with-gold :players-selected-this-round inc)]
-      (if (= role :prospector)
-        ;; Prospector is privilege-only: only selector gets benefit, then next role selection
-        (let [game-after-prospector (-> game-with-counter
-                                        (update-in [:players selector-idx :money] inc)
-                                        (update :available-roles disj role)
-                                        (update :used-roles conj role)
-                                        (assoc :current-player-idx (state/next-player-idx game-state)))
-              players-selected (:players-selected-this-round game-after-prospector)
-              num-players (count (:players game-after-prospector))]
-          ;; Check if round should end after prospector (each player has selected)
-          (if (>= players-selected num-players)
-            ;; Round is complete - check for game end conditions FIRST
-            (if (state/check-victory-conditions game-after-prospector)
-              ;; Game ends - calculate final scores
-              (let [final-players (mapv (fn [player]
-                                          (assoc player :final-score (state/calculate-victory-points player)))
-                                        (:players game-after-prospector))
-                    winner (apply max-key :final-score final-players)]
-                (-> game-after-prospector
-                    (assoc :players final-players)
-                    (assoc :game-over true)
-                    (assoc :winner winner)
-                    (assoc :phase :game-over)))
-              ;; Continue to new round only if game is not ending
-              (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-prospector))]
-                (-> game-after-prospector
-                    (update :round inc)
-                    (assoc :available-roles (set state/roles))
-                    (assoc :used-roles #{})
-                    ;; Add gold to unpicked roles BEFORE starting new round
-                    (update :role-gold (fn [role-gold]
-                                         (reduce (fn [rg role]
-                                                   (update rg role inc))
-                                                 role-gold
-                                                 unpicked-roles)))
-                    ;; Rotate governor to next player  
-                    (assoc :governor-idx (mod (inc (:governor-idx game-after-prospector)) num-players))
-                    (assoc :current-player-idx (mod (inc (:governor-idx game-after-prospector)) num-players))
-                    (assoc :players-selected-this-round 0)
-                    (assoc :phase :role-selection)
-                    ;; Clear trading house
-                    )))
-                    ;; Ships are now reset immediately when full in execute-captain
-            ;; Round continues
-            game-after-prospector))
-        ;; All other roles: all players execute in turn order
-        (let [execution-order (state/create-role-execution-order game-state selector-idx)]
-          (-> game-with-counter
-              (assoc :selected-role role)
-              (assoc :role-selector-idx selector-idx)
-              (assoc :role-execution-order execution-order)
-              (assoc :role-execution-current-idx (first execution-order))
-              (assoc :phase :role-execution)
-              (update :available-roles disj role)
-              (update :used-roles conj role)))))
+          game-with-counter (update game-with-gold :players-selected-this-round inc)
+          ;; All roles now use the same execution flow
+          execution-order (state/create-role-execution-order game-state selector-idx)]
+      (-> game-with-counter
+          (assoc :selected-role role)
+          (assoc :role-selector-idx selector-idx)
+          (assoc :role-execution-order execution-order)
+          (assoc :role-execution-current-idx (first execution-order))
+          (assoc :phase :role-execution)
+          (update :available-roles disj role)
+          (update :used-roles conj role)))
     game-state))
 
 (defn calculate-warehouse-storage [player]
@@ -840,8 +795,12 @@
     :craftsman (execute-craftsman game-state)
     :trader (execute-trader game-state player-id (first args))
     :captain (execute-captain game-state player-id (first args))
-    :prospector (let [executor-idx (:role-execution-current-idx game-state)]
-                  (update-in game-state [:players executor-idx :money] inc))
+    :prospector (let [executor-idx (:role-execution-current-idx game-state)
+                      selector-idx (:role-selector-idx game-state)]
+                  ;; Only the role selector gets the 1 gold bonus
+                  (if (= executor-idx selector-idx)
+                    (update-in game-state [:players executor-idx :money] inc)
+                    game-state))
     game-state))
 
 ;; Game phase management

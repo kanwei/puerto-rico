@@ -309,25 +309,27 @@
                   nil)))))))))
 
 (defn handle-automatic-role-execution [game-data]
-  "Handle roles that don't require player choices (Mayor, Craftsman)"
-  (let [selected-role (:selected-role game-data)
-        executor-player (current-role-executor game-data)]
-    (when (and executor-player
-               (contains? #{:mayor :craftsman} selected-role))
-      ;; Auto-execute for this player and advance
-      (let [current-game (:game-state @game-state)
-            player-id (:id executor-player)
-;; Execute the global role for entire table
-            game-after-execution (rules/execute-role current-game selected-role player-id)
-            ;; End the entire role execution phase (don't advance to next player)
-            new-game-state (rules/end-role-execution game-after-execution)]
-        (let [action-text (case selected-role
-                            :mayor "👥 Colonists distributed to all players"
-                            :craftsman "⚙️ All players produced goods"
-                            "Executed for all players")]
-          (add-log-entry action-text (:name executor-player)))
-        (swap! game-state assoc :game-state new-game-state)
-        (js/console.log "Auto-executed global role" selected-role "for entire table")))))
+  "Automatically execute roles that don't require choices"
+  (let [current-role (:selected-role game-data)]
+    (case current-role
+      :mayor
+      (do
+        (swap! game-state assoc :game-state (rules/execute-role game-data :mayor nil))
+        (swap! game-state update :game-state rules/advance-role-execution))
+
+      :craftsman
+      (do
+        (swap! game-state assoc :game-state (rules/execute-role game-data :craftsman nil))
+        (swap! game-state update :game-state rules/advance-role-execution))
+
+      :prospector
+      ;; Prospector requires no choices from any player
+      (let [executor (current-role-executor game-data)
+            updated-game (rules/execute-role game-data :prospector (:id executor))]
+        (swap! game-state assoc :game-state (rules/advance-role-execution updated-game)))
+
+      ;; Other roles require player choices
+      nil)))
 
 ;; Game state watcher for AI turns
 (defn execute-ai-turn-async [game-data]
