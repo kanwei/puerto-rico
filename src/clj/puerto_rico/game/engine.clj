@@ -2,7 +2,7 @@
   "Game engine that manages game flow and AI players"
   (:require [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]
-            [puerto-rico.ai.mcts :as ai]))
+            [puerto-rico.ai.heuristic :as ai]))
 
 (defn ai-player? [player]
   (:is-ai player))

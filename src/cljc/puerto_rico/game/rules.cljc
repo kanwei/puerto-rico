@@ -833,6 +833,6 @@
   "Apply a validated move to the game state"
   (case (:type move)
     :select-role (select-role game-state (:player-id move) (:role move))
-    :role-action (-> (execute-role game-state (:role move) (:player-id move) (:args move))
+    :role-action (-> (apply execute-role game-state (:role move) (:player-id move) (:args move))
                      (advance-role-execution))
     game-state))
