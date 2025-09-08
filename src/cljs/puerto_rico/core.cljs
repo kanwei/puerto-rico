@@ -782,50 +782,6 @@
          (for [[good amount] goods-with-amounts]
            ^{:key good} [:span.good-chip (str (name good) ":" amount)])]))]])
 
-(defn common-area [game-data]
-  [:div.common-area
-   [:h3 "🏢 Game State"]
-
-   ;; Top row - key supplies
-   [:div.supply-row
-    [:div.supply-item
-     [:strong "🏆 VP: "] (:victory-point-supply game-data)]
-    [:div.supply-item
-     [:strong "👥 Colonists: "] (:colonist-supply game-data)]
-    [:div.supply-item
-     [:strong "🚢 Ship: "] (get game-data :colonist-ship 0)]]
-
-;; Face-up plantations (horizontal)
-   [:div.supply-section
-    [:strong "🌱 Available Plantations: "]
-    (let [face-up (:face-up-plantations game-data)]
-      (for [[idx plantation-type] (map-indexed vector face-up)]
-        ^{:key idx} [:span.supply-chip (name plantation-type)]))
-    [:span.supply-chip (str "quarries:" (get game-data :quarry-supply 0))]]
-
-   ;; Goods supply (horizontal) 
-   [:div.supply-section
-    [:strong "📦 Goods: "]
-    (for [[good count] (sort-by first (:goods-supply game-data))]
-      ^{:key good} [:span.supply-chip (str (name good) ":" count)])]
-
-;; Trading house (if not empty)
-   (when (seq (:trading-house game-data))
-     [:div.supply-section
-      [:strong "🏪 Trading House: "]
-      (for [item (:trading-house game-data)]
-        (let [good-name (if (map? item) (:good item) item)]
-          ^{:key (str "th-" good-name)} [:span.supply-chip (name good-name)]))])
-
-;; Ships (horizontal)
-   [:div.supply-section
-    [:strong "⛵ Ships: "]
-    (for [[idx ship] (map-indexed vector (:ships game-data))]
-      ^{:key idx} [:span.supply-chip
-                   (if (:good ship)
-                     (str (name (:good ship)) " " (:amount ship 0) "/" (:capacity ship 0))
-                     (str "Empty/" (:capacity ship 0)))])]])
-
 (defn game-log-ui []
   [:div.game-log
    [:h3 "📜 Game Log"
@@ -884,27 +840,35 @@
         sorted-players (sort-by #(get-in % [:vp-breakdown :total-vps]) > players-with-breakdown)
         winner (first sorted-players)]
     [:div.game-over-main-pane
-     [:div.game-over-header-compact
+     [:div.game-over-header
       [:h2 "🏆 Game Over!"]
-      [:div.winner-compact
+      [:div.winner-announcement
        [:span "👑 Winner: "]
        [:span.winner-name (:name winner)]
        [:span.winner-score " (" (get-in winner [:vp-breakdown :total-vps]) " VP)"]]]
 
-     [:div.final-scores-compact
+     [:div.final-scores-table
       [:h3 "Final Scores:"]
-      (for [player sorted-players]
-        ^{:key (:id player)}
-        [:div.player-result-compact {:class (when (= player winner) "winner-highlight")}
-         [:div.player-info-compact
-          [:span.player-name-compact (:name player)]
-          [:span.player-score-compact (get-in player [:vp-breakdown :total-vps]) " VP"]]
-         [victory-points-breakdown-compact (:vp-breakdown player)]])]
+      [:table.scores-table
+       [:thead
+        [:tr
+         [:th "Player"]
+         [:th "🚢 Ship"]
+         [:th "🏛️ Build"]
+         [:th "Total VP"]]]
+       [:tbody
+        (for [player sorted-players]
+          ^{:key (:id player)}
+          [:tr {:class (when (= player winner) "winner-row")}
+           [:td.player-name (:name player)]
+           [:td.ship-points (get-in player [:vp-breakdown :ship-vps])]
+           [:td.building-points (get-in player [:vp-breakdown :building-vps])]
+           [:td.total-points (get-in player [:vp-breakdown :total-vps])]])]]]
 
-     [:div.game-over-actions-compact
-      [:button.new-game-compact {:on-click #(swap! game-state assoc :game-state (create-new-game))}
+     [:div.game-over-actions
+      [:button.new-game {:on-click #(swap! game-state assoc :game-state (create-new-game))}
        "New Game"]
-      [:button.ai-game-compact {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
+      [:button.ai-game {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
        "AI vs AI"]]]))
 
 (defn game-board []
@@ -921,20 +885,58 @@
            [:div.historical-banner
             "📊 Viewing Historical State - Log Entry #" (:log-index display-state)])
 
-         ;; Game over overlay (if game is over)
-         ;; Compact header bar
-         [:div.header-bar
-          [:h2 "🏝️ Puerto Rico"]
-          [:div.game-status
-           [:span.status-item "📅 Round " (:round game-data)]
-           [:span.status-item
-            (if (:game-over game-data)
-              "🏆 Game Over"
-              (str "⚡ " (name (:phase game-data))))]
-           [:span.status-item "👑 " (:name (state/current-governor game-data))]
-           [:span.status-item "👤 " (if current-player-data
-                                      (:name current-player-data)
-                                      "None")]]]
+         ;; Expanded header bar with game state info
+         [:div.header-bar-expanded
+          [:div.header-row-1
+           [:h2 "🏝️ Puerto Rico"]
+           [:div.game-status
+            [:span.status-item "📅 Round " (:round game-data)]
+            [:span.status-item
+             (if (:game-over game-data)
+               "🏆 Game Over"
+               (str "⚡ " (name (:phase game-data))))]
+            [:span.status-item "👑 " (:name (state/current-governor game-data))]
+            [:span.status-item "👤 " (if current-player-data
+                                       (:name current-player-data)
+                                       "None")]]]
+
+          [:div.header-row-2
+           ;; Key supplies
+           [:div.supply-group
+            [:span.supply-label "🏆 VP: "] [:span.supply-value (:victory-point-supply game-data)]
+            [:span.supply-label "👥 Colonists: "] [:span.supply-value (:colonist-supply game-data)]
+            [:span.supply-label "🚢 Ship: "] [:span.supply-value (get game-data :colonist-ship 0)]]
+
+           ;; Available plantations
+           [:div.supply-group
+            [:span.supply-label "🌱 Available: "]
+            (let [face-up (:face-up-plantations game-data)]
+              (for [[idx plantation-type] (map-indexed vector face-up)]
+                ^{:key idx} [:span.supply-chip (name plantation-type)]))
+            [:span.supply-chip (str "quarries:" (get game-data :quarry-supply 0))]]
+
+           ;; Goods supply
+           [:div.supply-group
+            [:span.supply-label "📦 Goods: "]
+            (for [[good count] (sort-by first (:goods-supply game-data))]
+              ^{:key good} [:span.supply-chip (str (name good) ":" count)])]
+
+           ;; Trading house
+           (when (seq (:trading-house game-data))
+             [:div.supply-group
+              [:span.supply-label "🏪 Trading: "]
+              (for [item (:trading-house game-data)]
+                (let [good-name (if (map? item) (:good item) item)]
+                  ^{:key (str "th-" good-name)} [:span.supply-chip (name good-name)]))])
+
+           ;; Ships
+           [:div.supply-group
+            [:span.supply-label "⛵ Ships: "]
+            (for [[idx ship] (map-indexed vector (:ships game-data))]
+              ^{:key idx} [:span.supply-chip
+                           (if (:good ship)
+                             (str (name (:good ship)) " " (:amount ship 0) "/" (:capacity ship 0))
+                             (str "Empty/" (:capacity ship 0)))])]]]
 
          ;; Players in horizontal row (compact)
          [:div.players-row
@@ -942,9 +944,9 @@
             ^{:key (:id player)}
             [player-board player (= idx (:current-player-idx game-data))])]
 
-         ;; Main action area and common area side by side
-         [:div.main-area
-          [:div.action-area
+         ;; Main content area - action area (1/3) and game log (2/3)
+         [:div.main-content-area
+          [:div.action-area-narrow
            (cond
             ;; Show game over screen in main pane
              (:game-over game-data)
@@ -996,8 +998,7 @@
                            gold-amount (get-in game-data [:role-gold role] 0)]
                        ^{:key role} [role-card role available? gold-amount handle-role-selection]))]])))]
 
-          [:div.sidebar
-           [common-area game-data]
+          [:div.game-log-expanded
            [game-log-ui]]]])
 
       ;; No game started
