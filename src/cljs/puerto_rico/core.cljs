@@ -909,11 +909,16 @@
 
            ;; Available plantations
            [:div.supply-group
-            [:span.supply-label "🌱 Available: "]
-            (let [face-up (:face-up-plantations game-data)]
-              (for [[idx plantation-type] (map-indexed vector face-up)]
-                ^{:key idx} [:span.supply-chip (name plantation-type)]))
-            [:span.supply-chip (str "quarries:" (get game-data :quarry-supply 0))]]
+            [:span.supply-label "🌱 Plantations: "]
+            (let [face-up (:face-up-plantations game-data)
+                  deck-count (count (:plantation-supply game-data))
+                  discard-count (count (:plantation-discard game-data))]
+              [:span
+               (for [[idx plantation-type] (map-indexed vector face-up)]
+                 ^{:key idx} [:span.supply-chip (name plantation-type)])
+               [:span.supply-chip (str "deck:" deck-count)]
+               [:span.supply-chip (str "discard:" discard-count)]
+               [:span.supply-chip (str "quarries:" (get game-data :quarry-supply 0))]])]
 
            ;; Goods supply
            [:div.supply-group

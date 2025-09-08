@@ -39,7 +39,7 @@
                            (let [colonist-supply (:colonist-supply game-after-quarry)
                                  colonist-ship (:colonist-ship game-after-quarry)
                                  plantation-count (count (get-in game-after-quarry [:players player-idx :plantations]))
-                                 new-plantation-idx (dec plantation-count)] ; Index of the quarry we just added
+                                 new-plantation-idx (dec plantation-count)]
                              (cond
                                ;; Take colonist from supply
                                (pos? colonist-supply)
@@ -59,34 +59,25 @@
 
       ;; Choosing from face-up plantations
       (some #(= % plantation-choice) face-up-plantations)
-      (let [;; Remove the first occurrence of the chosen plantation
+      (let [;; Remove the chosen plantation WITHOUT drawing replacement yet
             idx (.indexOf face-up-plantations plantation-choice)
             updated-face-up (vec (concat (subvec face-up-plantations 0 idx)
                                          (subvec face-up-plantations (inc idx))))
-            ;; Draw replacement from deck
-            plantation-deck (:plantation-supply game-state)
-            new-face-up (if (seq plantation-deck)
-                          (conj updated-face-up (first plantation-deck))
-                          updated-face-up)
-            new-deck (if (seq plantation-deck)
-                       (vec (rest plantation-deck))
-                       [])
             ;; Update player's plantations
             updated-players (assoc-in (:players game-state)
                                       [player-idx :plantations]
                                       (conj (get-in (:players game-state) [player-idx :plantations])
                                             {:type plantation-choice :colonists 0}))
-            ;; Basic game state after taking plantation
+            ;; Basic game state after taking plantation (no replenishment yet)
             game-after-plantation (assoc game-state
-                                         :face-up-plantations new-face-up
-                                         :plantation-supply new-deck
+                                         :face-up-plantations updated-face-up
                                          :players updated-players)
             ;; Apply hospice bonus if applicable
             final-game (if has-hospice
                          (let [colonist-supply (:colonist-supply game-after-plantation)
                                colonist-ship (:colonist-ship game-after-plantation)
                                plantation-count (count (get-in game-after-plantation [:players player-idx :plantations]))
-                               new-plantation-idx (dec plantation-count)] ; Index of the plantation we just added
+                               new-plantation-idx (dec plantation-count)]
                            (cond
                              ;; Take colonist from supply
                              (pos? colonist-supply)
@@ -106,6 +97,37 @@
       ;; Invalid choice
       :else
       game-state)))
+
+(defn replenish-plantations [game-state]
+  "Replenish face-up plantations after all players have taken their turn in Settler phase.
+   Discard any remaining face-up tiles and draw new ones (one more than number of players)."
+  (let [num-players (count (:players game-state))
+        target-count (inc num-players)
+        current-face-up (:face-up-plantations game-state)
+        plantation-deck (:plantation-supply game-state)
+        ;; Discard any remaining face-up plantations to discard pile
+        new-discard (vec (concat (or (:plantation-discard game-state) []) current-face-up))
+        ;; Draw new plantations from deck
+        draw-count (min target-count (count plantation-deck))
+        new-face-up (vec (take draw-count plantation-deck))
+        new-deck (vec (drop draw-count plantation-deck))
+        ;; If deck is empty but we need more, shuffle discard pile
+        final-state (if (and (< (count new-face-up) target-count)
+                             (seq new-discard))
+                      (let [shuffled-discard (shuffle new-discard)
+                            additional-needed (- target-count (count new-face-up))
+                            additional-draw (min additional-needed (count shuffled-discard))
+                            additional-tiles (take additional-draw shuffled-discard)
+                            remaining-discard (vec (drop additional-draw shuffled-discard))]
+                        (-> game-state
+                            (assoc :face-up-plantations (vec (concat new-face-up additional-tiles)))
+                            (assoc :plantation-supply new-deck)
+                            (assoc :plantation-discard remaining-discard)))
+                      (-> game-state
+                          (assoc :face-up-plantations new-face-up)
+                          (assoc :plantation-supply new-deck)
+                          (assoc :plantation-discard new-discard)))]
+    final-state))
 
 (defn get-tile-capacity [tile]
   "Get the maximum number of colonists a tile can hold"
@@ -731,12 +753,16 @@
                                                 (assoc :role-execution-order nil)
                                                 (assoc :role-execution-current-idx nil)
                                                 (assoc :current-player-idx (state/next-player-idx game-state)))]
-;; If Captain role just finished, apply storage rules and empty full ships
-                              (if (= completed-role :captain)
+                              (cond
+                                ;; If Settler role just finished, replenish plantations
+                                (= completed-role :settler)
+                                (replenish-plantations base-game)
+                                ;; If Captain role just finished, apply storage rules and empty full ships
+                                (= completed-role :captain)
                                 (-> base-game
                                     (apply-storage-rules)
                                     (return-full-ships-to-supply))
-                                base-game))
+                                :else base-game))
             players-selected (:players-selected-this-round game-after-role)
             num-players (count (:players game-after-role))]
         ;; Check if round should end (each player has selected a role)

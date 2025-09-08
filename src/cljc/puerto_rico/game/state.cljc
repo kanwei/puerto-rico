@@ -161,6 +161,7 @@
      ;; Track how many players have selected roles this round
      :players-selected-this-round 0
      :plantation-supply remaining-deck
+     :plantation-discard []
      :face-up-plantations face-up-plantations
      :quarry-supply quarry-count
      :goods-supply {:corn 10 :indigo 11 :sugar 11 :tobacco 9 :coffee 9}
