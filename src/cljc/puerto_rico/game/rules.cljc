@@ -641,26 +641,38 @@
               num-players (count (:players game-after-prospector))]
           ;; Check if round should end after prospector (each player has selected)
           (if (>= players-selected num-players)
-            ;; Round is complete, start new round
-            (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-prospector))]
-              (-> game-after-prospector
-                  (update :round inc)
-                  (assoc :available-roles (set state/roles))
-                  (assoc :used-roles #{})
-                  ;; Add gold to unpicked roles BEFORE starting new round
-                  (update :role-gold (fn [role-gold]
-                                       (reduce (fn [rg role]
-                                                 (update rg role inc))
-                                               role-gold
-                                               unpicked-roles)))
-                  ;; Rotate governor to next player  
-                  (assoc :governor-idx (mod (inc (:governor-idx game-after-prospector)) num-players))
-                  (assoc :current-player-idx (mod (inc (:governor-idx game-after-prospector)) num-players))
-                  (assoc :players-selected-this-round 0)
-                  (assoc :phase :role-selection)
-                  ;; Clear trading house
-                  ))
-                  ;; Ships are now reset immediately when full in execute-captain
+            ;; Round is complete - check for game end conditions FIRST
+            (if (state/check-victory-conditions game-after-prospector)
+              ;; Game ends - calculate final scores
+              (let [final-players (mapv (fn [player]
+                                          (assoc player :final-score (state/calculate-victory-points player)))
+                                        (:players game-after-prospector))
+                    winner (apply max-key :final-score final-players)]
+                (-> game-after-prospector
+                    (assoc :players final-players)
+                    (assoc :game-over true)
+                    (assoc :winner winner)
+                    (assoc :phase :game-over)))
+              ;; Continue to new round only if game is not ending
+              (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-prospector))]
+                (-> game-after-prospector
+                    (update :round inc)
+                    (assoc :available-roles (set state/roles))
+                    (assoc :used-roles #{})
+                    ;; Add gold to unpicked roles BEFORE starting new round
+                    (update :role-gold (fn [role-gold]
+                                         (reduce (fn [rg role]
+                                                   (update rg role inc))
+                                                 role-gold
+                                                 unpicked-roles)))
+                    ;; Rotate governor to next player  
+                    (assoc :governor-idx (mod (inc (:governor-idx game-after-prospector)) num-players))
+                    (assoc :current-player-idx (mod (inc (:governor-idx game-after-prospector)) num-players))
+                    (assoc :players-selected-this-round 0)
+                    (assoc :phase :role-selection)
+                    ;; Clear trading house
+                    )))
+                    ;; Ships are now reset immediately when full in execute-captain
             ;; Round continues
             game-after-prospector))
         ;; All other roles: all players execute in turn order
@@ -781,9 +793,9 @@
             num-players (count (:players game-after-role))]
         ;; Check if round should end (each player has selected a role)
         (if (>= players-selected num-players)
-          ;; Round is complete, check for game end conditions
+          ;; Round is complete - FIRST check for game end conditions before doing anything else
           (if (state/check-victory-conditions game-after-role)
-            ;; Game ends - calculate final scores
+            ;; Game ends - calculate final scores (keep same round number)
             (let [final-players (mapv (fn [player]
                                         (assoc player :final-score (state/calculate-victory-points player)))
                                       (:players game-after-role))
@@ -793,7 +805,7 @@
                   (assoc :game-over true)
                   (assoc :winner winner)
                   (assoc :phase :game-over)))
-            ;; Continue to new round
+            ;; Continue to new round only if game is not ending
             (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))]
               (-> game-after-role
                   (update :round inc)
@@ -847,25 +859,37 @@
         num-players (count (:players game-after-role))]
     ;; Check if round should end (each player has selected a role)
     (if (>= players-selected num-players)
-      ;; Round is complete, start new round
-      (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))]
-        (-> game-after-role
-            (update :round inc)
-            (assoc :available-roles (set state/roles))
-            (assoc :used-roles #{})
-            ;; Add gold to unpicked roles BEFORE starting new round
-            (update :role-gold (fn [role-gold]
-                                 (reduce (fn [rg role]
-                                           (update rg role inc))
-                                         role-gold
-                                         unpicked-roles)))
-            ;; Rotate governor to next player
-            (assoc :governor-idx (mod (inc (:governor-idx game-after-role)) num-players))
-            (assoc :current-player-idx (mod (inc (:governor-idx game-after-role)) num-players)) ;; Governor goes first
-            (assoc :players-selected-this-round 0)
-            (assoc :phase :role-selection)
-            ;; Reset full ships and return goods to supply
-            (return-full-ships-to-supply)))
+      ;; Round is complete - check for game end conditions FIRST
+      (if (state/check-victory-conditions game-after-role)
+        ;; Game ends - calculate final scores
+        (let [final-players (mapv (fn [player]
+                                    (assoc player :final-score (state/calculate-victory-points player)))
+                                  (:players game-after-role))
+              winner (apply max-key :final-score final-players)]
+          (-> game-after-role
+              (assoc :players final-players)
+              (assoc :game-over true)
+              (assoc :winner winner)
+              (assoc :phase :game-over)))
+        ;; Continue to new round only if game is not ending
+        (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))]
+          (-> game-after-role
+              (update :round inc)
+              (assoc :available-roles (set state/roles))
+              (assoc :used-roles #{})
+              ;; Add gold to unpicked roles BEFORE starting new round
+              (update :role-gold (fn [role-gold]
+                                   (reduce (fn [rg role]
+                                             (update rg role inc))
+                                           role-gold
+                                           unpicked-roles)))
+              ;; Rotate governor to next player
+              (assoc :governor-idx (mod (inc (:governor-idx game-after-role)) num-players))
+              (assoc :current-player-idx (mod (inc (:governor-idx game-after-role)) num-players)) ;; Governor goes first
+              (assoc :players-selected-this-round 0)
+              (assoc :phase :role-selection)
+              ;; Reset full ships and return goods to supply
+              (return-full-ships-to-supply))))
       ;; Round continues with next player
       game-after-role)))
 
