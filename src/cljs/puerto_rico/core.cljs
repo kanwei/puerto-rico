@@ -3,7 +3,8 @@
             [reagent.dom :as rdom]
             [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]
-            [puerto-rico.ai.heuristic :as ai]))
+            [puerto-rico.ai.heuristic :as ai]
+            [puerto-rico.ai.personalities :as personalities]))
 
 ;; Forward declaration for function used before definition
 (declare handle-automatic-role-execution game-state-watcher)
@@ -80,17 +81,32 @@
 (defn create-new-game []
   (clear-log)
   (let [players [(state/new-player 1 "Alice (Human)")
-                 (assoc (state/new-player 2 "Bob (AI)") :is-ai true)
-                 (assoc (state/new-player 3 "Carol (AI)") :is-ai true)]]
+                 (let [personality (personalities/assign-random-personality)]
+                   (-> (state/new-player 2 "Bob")
+                       (assoc :is-ai true)
+                       (assoc :personality personality)))
+                 (let [personality (personalities/assign-random-personality)]
+                   (-> (state/new-player 3 "Carol")
+                       (assoc :is-ai true)
+                       (assoc :personality personality)))]]
     (add-log-entry "New game started with 3 players")
     (state/new-game-state players)))
 
 (defn create-ai-only-game []
   (clear-log)
-  (let [players [(assoc (state/new-player 1 "Alice (AI)") :is-ai true)
-                 (assoc (state/new-player 2 "Bob (AI)") :is-ai true)
-                 (assoc (state/new-player 3 "Carol (AI)") :is-ai true)]]
-    (add-log-entry "AI-only game started - watch the AIs compete!")
+  (let [players [(let [personality (personalities/assign-random-personality)]
+                   (-> (state/new-player 1 "Alice")
+                       (assoc :is-ai true)
+                       (assoc :personality personality)))
+                 (let [personality (personalities/assign-random-personality)]
+                   (-> (state/new-player 2 "Bob")
+                       (assoc :is-ai true)
+                       (assoc :personality personality)))
+                 (let [personality (personalities/assign-random-personality)]
+                   (-> (state/new-player 3 "Carol")
+                       (assoc :is-ai true)
+                       (assoc :personality personality)))]]
+    (add-log-entry "New AI-only game started with 3 players")
     (state/new-game-state players)))
 
 ;; Helper functions
@@ -345,15 +361,21 @@
         :role-selection
         (let [available-roles (:available-roles game-data)
               player-id (:id ai-player)
-              ;; Use heuristic AI to evaluate all roles
+              personality (:personality ai-player)
+              personality-fns (personalities/get-personality-functions personality)
+              role-weights ((:role-weights personality-fns) game-data player-id)
+              ;; Combine heuristic evaluation with personality weights
               role-scores (map (fn [role]
-                                 [role (ai/evaluate-role-utility game-data player-id role)])
+                                 (let [heuristic-score (ai/evaluate-role-utility game-data player-id role)
+                                       personality-weight (get role-weights role 50)]
+                                   [role (* heuristic-score (/ personality-weight 50))]))
                                available-roles)
               sorted-scores (sort-by second > role-scores)
               best-role (first (first sorted-scores))
               best-score (second (first sorted-scores))]
           ;; Log decision process to console
-          (js/console.log "=== AI Role Selection ===" (:name ai-player))
+          (js/console.log "=== AI Role Selection ===" (:name ai-player)
+                          "(" (personalities/personality-name personality) ")")
           (js/console.log "Available roles and scores:")
           (doseq [[role score] sorted-scores]
             (js/console.log (str "  " (name role) ": " score)))
@@ -383,17 +405,23 @@
                                              (:buildings executor-player))
                   can-take-quarry (and (pos? quarry-supply) (or is-role-selector has-construction-hut))
                   available-choices (concat face-up-plantations
-                                            (when can-take-quarry [:quarry]))]
+                                            (when can-take-quarry [:quarry]))
+                  personality (:personality executor-player)
+                  personality-fns (personalities/get-personality-functions personality)
+                  plantation-score-fn (:plantation-score personality-fns)]
               (when (seq available-choices)
-                (let [;; Use heuristic AI for plantation selection
+                (let [;; Combine heuristic evaluation with personality scoring
                       plantation-scores (map (fn [p]
-                                               [p (ai/evaluate-plantation-value game-data executor-player p)])
+                                               (let [heuristic-score (ai/evaluate-plantation-value game-data executor-player p)
+                                                     personality-score (plantation-score-fn game-data executor-player p)]
+                                                 [p (* heuristic-score (/ personality-score 50))]))
                                              available-choices)
                       sorted-scores (sort-by second > plantation-scores)
                       best-choice (first (first sorted-scores))
                       best-score (second (first sorted-scores))]
                   ;; Log decision
-                  (js/console.log "=== AI Plantation Selection ===" (:name executor-player))
+                  (js/console.log "=== AI Plantation Selection ===" (:name executor-player)
+                                  "(" (personalities/personality-name personality) ")")
                   (doseq [[p score] sorted-scores]
                     (js/console.log (str "  " (name p) ": " score)))
                   (js/console.log (str "Selected: " (name best-choice) " (score: " best-score ")"))
@@ -407,6 +435,9 @@
 
             :builder
             (let [;; Calculate affordable buildings with quarry discounts
+                  personality (:personality executor-player)
+                  personality-fns (personalities/get-personality-functions personality)
+                  building-score-fn (:building-score personality-fns)
                   affordable-buildings (keys (filter (fn [[building-key building-info]]
                                                        (let [occupied-quarries (count (filter #(and (= (:type %) :quarry)
                                                                                                     (pos? (:colonists %)))
@@ -418,18 +449,22 @@
                                                               (not (some #(= (:type %) building-key) (:buildings executor-player))))))
                                                      state/buildings))]
               (if (seq affordable-buildings)
-                (let [;; Use heuristic AI for building selection
+                (let [;; Combine heuristic evaluation with personality scoring
                       building-scores (map (fn [building-key]
-                                             (let [building-info (get state/buildings building-key)]
-                                               [building-key (ai/evaluate-building-synergy game-data executor-player
-                                                                                           building-key building-info)]))
+                                             (let [building-info (get state/buildings building-key)
+                                                   heuristic-score (ai/evaluate-building-synergy game-data executor-player
+                                                                                                 building-key building-info)
+                                                   personality-score (building-score-fn game-data executor-player
+                                                                                        building-key building-info)]
+                                               [building-key (* heuristic-score (/ personality-score 50))]))
                                            affordable-buildings)
                       sorted-scores (sort-by second > building-scores)
                       best-building (first (first sorted-scores))
                       best-score (second (first sorted-scores))
                       building-name (-> best-building name (clojure.string/replace "-" " "))]
                   ;; Log decision
-                  (js/console.log "=== AI Building Selection ===" (:name executor-player))
+                  (js/console.log "=== AI Building Selection ===" (:name executor-player)
+                                  "(" (personalities/personality-name personality) ")")
                   (doseq [[b score] sorted-scores]
                     (js/console.log (str "  " (name b) ": " score)))
                   (js/console.log (str "Selected: " (name best-building) " (score: " best-score ")"))
@@ -449,17 +484,22 @@
 
             :trader
             (let [tradeable-goods (filter #(rules/can-trade-good? game-data executor-player %)
-                                          [:corn :indigo :sugar :tobacco :coffee])]
+                                          [:corn :indigo :sugar :tobacco :coffee])
+                  personality (:personality executor-player)
+                  personality-fns (personalities/get-personality-functions personality)
+                  trade-multiplier (:trade-multiplier personality-fns)]
               (if (seq tradeable-goods)
-                (let [;; Use heuristic AI for trade selection
+                (let [;; Combine heuristic evaluation with personality multiplier
                       trade-scores (map (fn [good]
-                                          [good (ai/evaluate-trade-value game-data executor-player good)])
+                                          (let [base-value (ai/evaluate-trade-value game-data executor-player good)]
+                                            [good (* base-value trade-multiplier)]))
                                         tradeable-goods)
                       sorted-scores (sort-by second > trade-scores)
                       best-good (first (first sorted-scores))
                       best-score (second (first sorted-scores))]
                   ;; Log decision
-                  (js/console.log "=== AI Trade Selection ===" (:name executor-player))
+                  (js/console.log "=== AI Trade Selection ===" (:name executor-player)
+                                  "(" (personalities/personality-name personality) ")")
                   (doseq [[g score] sorted-scores]
                     (js/console.log (str "  " (name g) ": " score)))
                   (js/console.log (str "Selected: " (name best-good) " (score: " best-score ")"))
@@ -479,17 +519,22 @@
 
             :captain
             (let [shippable-goods (filter #(pos? (get-in executor-player [:goods %] 0))
-                                          [:corn :indigo :sugar :tobacco :coffee])]
+                                          [:corn :indigo :sugar :tobacco :coffee])
+                  personality (:personality executor-player)
+                  personality-fns (personalities/get-personality-functions personality)
+                  ship-multiplier (:ship-multiplier personality-fns)]
               (if (seq shippable-goods)
-                (let [;; Use heuristic AI for shipping selection
+                (let [;; Combine heuristic evaluation with personality multiplier
                       ship-scores (map (fn [good]
-                                         [good (ai/evaluate-shipping-option game-data executor-player good)])
+                                         (let [base-value (ai/evaluate-shipping-option game-data executor-player good)]
+                                           [good (* base-value ship-multiplier)]))
                                        shippable-goods)
                       sorted-scores (sort-by second > ship-scores)
                       best-good (first (first sorted-scores))
                       best-score (second (first sorted-scores))]
                   ;; Log decision
-                  (js/console.log "=== AI Shipping Selection ===" (:name executor-player))
+                  (js/console.log "=== AI Shipping Selection ===" (:name executor-player)
+                                  "(" (personalities/personality-name personality) ")")
                   (doseq [[g score] sorted-scores]
                     (js/console.log (str "  " (name g) ": " score)))
                   (js/console.log (str "Selected: " (name best-good) " (score: " best-score ")"))
@@ -760,7 +805,10 @@
 (defn player-board [player current?]
   [:div.player-board {:class (when current? "current-player")}
    [:div.player-header
-    [:h4.player-name (str (:name player) (when current? " ⭐"))]
+    [:h4.player-name (str (:name player)
+                          (when (:is-ai player)
+                            (str " (" (personalities/personality-name (:personality player)) ")"))
+                          (when current? " ⭐"))]
     [:div.player-quick-stats
      [:span.money-badge "💰$" (:money player)]
      [:span.vp-badge "🏆" (:victory-points player)]
