@@ -590,9 +590,22 @@
             has-harbor (has-occupied-building? player :harbor)
             harbor-bonus (if has-harbor 1 0)
             ;; Award harbor bonus VP if applicable
-            [final-game harbor-vps-awarded] (if has-harbor
-                                              (award-victory-points game-after-base-vps player-idx harbor-bonus)
-                                              [game-after-base-vps 0])]
+            [game-after-harbor harbor-vps-awarded] (if has-harbor
+                                                     (award-victory-points game-after-base-vps player-idx harbor-bonus)
+                                                     [game-after-base-vps 0])
+            ;; Check if this player is the Captain (role selector) and award bonus
+            is-captain (= player-idx (:role-selector-idx game-state))
+            captain-bonus (if (and is-captain
+                                   (not (get-in game-state [:captain-bonus-awarded] false)))
+                            1
+                            0)
+            [game-with-captain-bonus captain-vps-awarded] (if (pos? captain-bonus)
+                                                            (award-victory-points game-after-harbor player-idx captain-bonus)
+                                                            [game-after-harbor 0])
+            ;; Mark that captain bonus has been awarded if applicable
+            final-game (if (pos? captain-bonus)
+                         (assoc game-with-captain-bonus :captain-bonus-awarded true)
+                         game-with-captain-bonus)]
         (-> final-game
             (update-in [:players player-idx :goods good-choice] - actual-amount)
             (assoc-in [:ships ship-idx :good] good-choice)
@@ -761,7 +774,8 @@
                                 (= completed-role :captain)
                                 (-> base-game
                                     (apply-storage-rules)
-                                    (return-full-ships-to-supply))
+                                    (return-full-ships-to-supply)
+                                    (dissoc :captain-bonus-awarded))
                                 :else base-game))
             players-selected (:players-selected-this-round game-after-role)
             num-players (count (:players game-after-role))]
