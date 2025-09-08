@@ -41,14 +41,13 @@
         ;; Calculate turn number within round (1-based)
         turn-num (if current-player-idx (inc current-player-idx) 1)
         turn-label (str round-num "." turn-num)
-        entry {:turn turn-label
-               :message message
-               :player player-name
-               :game-state-snapshot current-game ; Store the game state before this move
-               :timestamp (.getTime (js/Date.))}]
-    (swap! game-log conj entry)
-    ;; No limit - keep all entries to see start of game
-    ))
+        entry {:turn                turn-label
+               :message             message
+               :player              player-name
+               :game-state-snapshot current-game            ; Store the game state before this move
+               :timestamp           (.getTime (js/Date.))}]
+    (swap! game-log conj entry)))
+;; No limit - keep all entries to see start of game
 
 (defn view-historical-state [log-index]
   "Switch to viewing a historical game state"
@@ -67,7 +66,7 @@
       (if (and log-index (< log-index (count log-entries)))
         {:game-state (:game-state-snapshot (nth log-entries log-index))
          :historical true
-         :log-index log-index}
+         :log-index  log-index}
         @game-state))
     ;; Return current state with AI automation
     (let [game-data (game-state-watcher)]
@@ -416,7 +415,7 @@
           (js/console.log (str "Selected: " (name best-role) " (score: " best-score ")"))
 
           ;; Update display and execute selection
-          (reset! ai-action-display {:show true :player (:name ai-player)
+          (reset! ai-action-display {:show   true :player (:name ai-player)
                                      :action (str "🎭 Selected " (name best-role) " role")})
           (let [gold-on-role (get-in game-data [:role-gold best-role] 0)
                 role-msg (if (> gold-on-role 0)
@@ -436,6 +435,7 @@
             :settler
             (let [face-up-plantations (:face-up-plantations game-data)
                   quarry-supply (:quarry-supply game-data)
+                  plantation-deck (:plantation-supply game-data)
                   role-selector-idx (:role-selector-idx game-data)
                   current-player-idx (:role-execution-current-idx game-data)
                   is-role-selector (= current-player-idx role-selector-idx)
@@ -443,35 +443,60 @@
                                                    (:colonists %)
                                                    (pos? (:colonists %)))
                                              (:buildings executor-player))
-                  can-take-quarry (and (pos? quarry-supply) (or is-role-selector has-construction-hut))
+                  has-hacienda (state/has-occupied-building? executor-player :hacienda)
+                  hacienda-used (get-in game-data [:hacienda-used current-player-idx] false)
+                  can-take-quarry (and (pos? quarry-supply)
+                                       (or is-role-selector has-construction-hut)
+                                       (not (and hacienda-used has-hacienda has-construction-hut)))
                   available-choices (concat face-up-plantations
                                             (when can-take-quarry [:quarry]))
                   personality (:personality executor-player)
                   personality-fns (personalities/get-personality-functions personality)
                   plantation-score-fn (:plantation-score personality-fns)]
-              (when (seq available-choices)
-                (let [;; Combine heuristic evaluation with personality scoring
-                      plantation-scores (map (fn [p]
-                                               (let [heuristic-score (ai/evaluate-plantation-value game-data executor-player p)
-                                                     personality-score (plantation-score-fn game-data executor-player p)]
-                                                 [p (* heuristic-score (/ personality-score 50))]))
-                                             available-choices)
-                      sorted-scores (sort-by second > plantation-scores)
-                      best-choice (first (first sorted-scores))
-                      best-score (second (first sorted-scores))]
-                  ;; Log decision
-                  (js/console.log "=== AI Plantation Selection ===" (:name executor-player)
-                                  "(" (personalities/personality-name personality) ")")
-                  (doseq [[p score] sorted-scores]
-                    (js/console.log (str "  " (name p) ": " score)))
-                  (js/console.log (str "Selected: " (name best-choice) " (score: " best-score ")"))
+              ;; Handle hacienda bonus first if available
+              (when (and has-hacienda (not hacienda-used) (seq plantation-deck))
+                ;; AI usually uses hacienda (80% chance, or always for builder personality)
+                (when (or (= (:personality executor-player) :builder) (> (rand) 0.2))
+                  (js/setTimeout
+                   (fn []
+                     (let [updated-game (rules/execute-role (:game-state @game-state) :settler (:id executor-player) :random-from-deck)
+                           drawn-type (-> updated-game
+                                          :players
+                                          (nth current-player-idx)
+                                          :plantations
+                                          last
+                                          :type)]
+                       (swap! game-state assoc :game-state updated-game)
+                       (swap! game-state assoc-in [:game-state :hacienda-used current-player-idx] true)
+                       (add-log-entry (str "🏛️ Used Hacienda - drew " (name drawn-type)) (:name executor-player))))
+                   100)))
+              ;; Then normal plantation choice (with delay if hacienda was used)
+              (js/setTimeout
+               (fn []
+                 (when (seq available-choices)
+                   (let [;; Combine heuristic evaluation with personality scoring
+                         plantation-scores (map (fn [p]
+                                                  (let [heuristic-score (ai/evaluate-plantation-value game-data executor-player p)
+                                                        personality-score (plantation-score-fn game-data executor-player p)]
+                                                    [p (* heuristic-score (/ personality-score 50))]))
+                                                available-choices)
+                         sorted-scores (sort-by second > plantation-scores)
+                         best-choice (first (first sorted-scores))
+                         best-score (second (first sorted-scores))]
+                     ;; Log decision
+                     (js/console.log "=== AI Plantation Selection ===" (:name executor-player)
+                                     "(" (personalities/personality-name personality) ")")
+                     (doseq [[p score] sorted-scores]
+                       (js/console.log (str "  " (name p) ": " score)))
+                     (js/console.log (str "Selected: " (name best-choice) " (score: " best-score ")"))
 
-                  (reset! ai-action-display {:show true :player (:name executor-player)
-                                             :action (str "🌱 Took " (name best-choice) " plantation")})
-                  (add-log-entry (str "🌱 Took " (name best-choice) " plantation (score: " (Math/round best-score) ")") (:name executor-player))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-plantation-choice best-choice)) 250))))
+                     (reset! ai-action-display {:show   true :player (:name executor-player)
+                                                :action (str "🌱 Took " (name best-choice) " plantation")})
+                     (add-log-entry (str "🌱 Took " (name best-choice) " plantation (score: " (Math/round best-score) ")") (:name executor-player))
+                     (js/setTimeout #(do
+                                       (reset! ai-action-display {:show false :player "" :action ""})
+                                       (handle-plantation-choice best-choice)
+                                       (if (and has-hacienda (not hacienda-used)) 200 0)) 250))))))
 
             :builder
             (let [;; Calculate affordable buildings with quarry discounts
@@ -519,7 +544,7 @@
                         cost-msg (if (> discount 0)
                                    (str " for $" actual-cost " (was $" base-cost ", -" discount " quarry discount)")
                                    (str " for $" actual-cost))]
-                    (reset! ai-action-display {:show true :player (:name executor-player)
+                    (reset! ai-action-display {:show   true :player (:name executor-player)
                                                :action (str "🏗️ Built " building-name)})
                     (add-log-entry (str "🏗️ Built " building-name cost-msg " (score: " (Math/round best-score) ")") (:name executor-player)))
                   (js/setTimeout #(do
@@ -554,7 +579,7 @@
                     (js/console.log (str "  " (name g) ": " score)))
                   (js/console.log (str "Selected: " (name best-good) " (score: " best-score ")"))
 
-                  (reset! ai-action-display {:show true :player (:name executor-player)
+                  (reset! ai-action-display {:show   true :player (:name executor-player)
                                              :action (str "💰 Sold " (name best-good))})
                   ;; Calculate trade value including bonuses
                   (let [base-value (get {:corn 0 :indigo 1 :sugar 2 :tobacco 3 :coffee 4} best-good)
@@ -594,7 +619,7 @@
                     (js/console.log (str "  " (name g) ": " score)))
                   (js/console.log (str "Selected: " (name best-good) " (score: " best-score ")"))
 
-                  (reset! ai-action-display {:show true :player (:name executor-player)
+                  (reset! ai-action-display {:show   true :player (:name executor-player)
                                              :action (str "🚢 Shipped " (name best-good))})
                   ;; Calculate how many goods can be shipped
                   (let [goods-amount (get-in executor-player [:goods best-good] 0)]
@@ -613,7 +638,7 @@
             ;; Prospector auto-executes - only selector gets 1 gold
             (let [is-selector (= (:role-execution-current-idx game-data) (:role-selector-idx game-data))]
               (when is-selector
-                (reset! ai-action-display {:show true :player (:name executor-player)
+                (reset! ai-action-display {:show   true :player (:name executor-player)
                                            :action "💰 Gained 1 doubloon from Prospector"}))
               ;; Don't log here - already logged when role was selected
               (js/setTimeout #(do
@@ -657,7 +682,7 @@
 
 ;; Components
 (defn role-card [role available? gold-amount on-select]
-  [:div.role-card {:class (when-not available? "disabled")
+  [:div.role-card {:class    (when-not available? "disabled")
                    :on-click (when available? #(on-select role))}
    [:h3 (name role)]
    (when (and gold-amount (> gold-amount 0))
@@ -677,10 +702,37 @@
 (defn plantation-choice-ui [game-data]
   (let [face-up-plantations (:face-up-plantations game-data)
         quarry-supply (:quarry-supply game-data)
-        current-player-data (current-role-executor game-data)]
+        plantation-deck (:plantation-supply game-data)
+        current-player-data (current-role-executor game-data)
+        has-hacienda (state/has-occupied-building? current-player-data :hacienda)
+        has-construction-hut (state/has-occupied-building? current-player-data :construction-hut)
+        role-selector-idx (:role-selector-idx game-data)
+        current-player-idx (:role-execution-current-idx game-data)
+        is-role-selector (= current-player-idx role-selector-idx)
+        can-take-quarry (and (pos? quarry-supply)
+                             (or is-role-selector has-construction-hut))
+        ;; Track if hacienda bonus was used this turn
+        hacienda-used (get-in game-data [:hacienda-used current-player-idx] false)]
     [:div.role-execution
      [:h2 "🌱 Settler - Choose a Plantation"]
      [:div
+      ;; Hacienda bonus - draw from deck BEFORE regular turn
+      (when (and has-hacienda (not hacienda-used) (seq plantation-deck))
+        [:div.hacienda-bonus
+         [:h3 "🏛️ Hacienda Bonus (use before regular turn)"]
+         [:p "You may draw a random plantation from the deck first"]
+         [:div.choice-grid
+          [:div.choice-card {:on-click (fn []
+                                         ;; Draw from deck
+                                         (handle-plantation-choice :random-from-deck)
+                                         ;; Mark hacienda as used
+                                         (swap! game-state assoc-in [:game-state :hacienda-used current-player-idx] true))}
+           [:h3 "Draw Random"]
+           [:p (str (count plantation-deck) " tiles in deck")]]
+          [:div.choice-card.skip {:on-click #(swap! game-state assoc-in [:game-state :hacienda-used current-player-idx] true)}
+           [:h3 "Skip Bonus"]
+           [:p "Continue to regular turn"]]]])
+
       [:p "Select a plantation tile to place on your island:"]
       [:div.choice-grid
        ;; Face-up plantation choices
@@ -689,24 +741,18 @@
          [:div.choice-card {:on-click #(handle-plantation-choice plantation-type)}
           [:h3 (name plantation-type)]])
 
-;; Quarry choice (only if player qualifies)
-       (let [role-selector-idx (:role-selector-idx game-data)
-             current-player-idx (:role-execution-current-idx game-data)
-             is-role-selector (= current-player-idx role-selector-idx)
-             has-construction-hut (some #(and (= (:type %) :construction-hut)
-                                              (:colonists %)
-                                              (pos? (:colonists %)))
-                                        (:buildings current-player-data))
-             can-take-quarry (and (pos? quarry-supply) (or is-role-selector has-construction-hut))]
-         (when can-take-quarry
-           ^{:key "quarry"}
-           [:div.choice-card {:on-click #(handle-plantation-choice :quarry)}
-            [:h3 "quarry"]
-            [:p "Available: " quarry-supply]
-            (when-not is-role-selector
-              [:p.privilege-text "Construction Hut allows quarry"])]))
+       ;; Quarry choice (only if player qualifies)
+       ;; Note: If hacienda was used and player has construction hut, can't take quarry
+       (when (and can-take-quarry
+                  (not (and hacienda-used has-hacienda has-construction-hut)))
+         ^{:key "quarry"}
+         [:div.choice-card {:on-click #(handle-plantation-choice :quarry)}
+          [:h3 "quarry"]
+          [:p "Available: " quarry-supply]
+          (when-not is-role-selector
+            [:p.privilege-text "Construction Hut allows quarry"])])
 
-;; Skip option (always available)
+       ;; Skip option (always available)
        ^{:key "skip"}
        [:div.choice-card.skip {:on-click #(handle-skip-role :settler)}
         [:h3 "Skip"]
@@ -760,7 +806,7 @@
 
 (defn building-choice-ui [game-data]
   (let [current-player-data (current-role-executor game-data)
-;; Get building types the player already owns
+        ;; Get building types the player already owns
         owned-building-types (set (map :type (:buildings current-player-data)))
         affordable-buildings (filter (fn [[building-key building-info]]
                                        (and (>= (:money current-player-data) (:cost building-info))
@@ -836,7 +882,7 @@
 (defn role-execution-ui [game-data]
   (let [selected-role (:selected-role game-data)
         executor-player (current-role-executor game-data)]
-;; DO NOT auto-execute here - it causes multiple executions on every render
+    ;; DO NOT auto-execute here - it causes multiple executions on every render
     ;; Auto-execution should only happen once in handle-ai-turn or handle-role-selection
 
     (case selected-role
@@ -895,7 +941,7 @@
        (for [[idx plantation] (map-indexed vector (:plantations player))]
          (let [plantation-type (if (map? plantation) (:type plantation) plantation)
                occupied (if (map? plantation) (:colonists plantation 0) 0)
-               total-capacity 1] ; plantations always have 1 worker slot
+               total-capacity 1]                            ; plantations always have 1 worker slot
            ^{:key idx} [:span.plantation-chip
                         (str (name plantation-type) " " (worker-slots-display occupied total-capacity))]))])
 
@@ -923,7 +969,7 @@
        (for [[idx entry] (map-indexed vector @game-log)]
          ^{:key idx}
          [:div.log-entry
-          {:class (when (= idx (:state-index @historical-view)) "selected")
+          {:class    (when (= idx (:state-index @historical-view)) "selected")
            :on-click #(view-historical-state idx)}
           [:span.turn-number (:turn entry)]
           (when (:player entry)
@@ -1022,8 +1068,8 @@
                (str "⚡ " (name (:phase game-data))))]
             [:span.status-item "👑 " (:name (state/current-governor game-data))]
             [:span.status-item "👤 " (if current-player-data
-                                       (:name current-player-data)
-                                       "None")]]]
+                                      (:name current-player-data)
+                                      "None")]]]
 
           [:div.header-row-2
            ;; Key supplies
@@ -1078,32 +1124,32 @@
          [:div.main-content-area
           [:div.action-area-narrow
            (cond
-            ;; Show game over screen in main pane
+             ;; Show game over screen in main pane
              (:game-over game-data)
              [game-over-main-pane game-data]
 
-            ;; Historical state - just show static info
+             ;; Historical state - just show static info
              is-historical
              [:div.historical-view
               [:h3 "📊 Historical Game State"]
               [:p "This is the game state before the selected log entry was executed."]
               [:p "Game interactions are disabled in historical view."]]
 
-            ;; Current state - show interactive elements
+             ;; Current state - show interactive elements
              :else
              (let [executor (current-role-executor game-data)
-                  ;; Determine if we need to show AI button
+                   ;; Determine if we need to show AI button
                    ai-player (cond
-                              ;; Role execution phase - check if executor is AI
+                               ;; Role execution phase - check if executor is AI
                                (= (:phase game-data) :role-execution)
                                (when (:is-ai executor) executor)
-                              ;; Role selection phase - check if current player is AI
+                               ;; Role selection phase - check if current player is AI
                                (= (:phase game-data) :role-selection)
                                (when (:is-ai current-player-data) current-player-data)
-                              ;; Default
+                               ;; Default
                                :else nil)]
                (cond
-               ;; Auto-execute AI turns with visual feedback
+                 ;; Auto-execute AI turns with visual feedback
                  ai-player
                  (let [ai-display @ai-action-display]
                    (if (:show ai-display)
@@ -1114,11 +1160,11 @@
                       [:h3 "⏳ AI Processing"]
                       [:p (:name ai-player) " is making a decision..."]]))
 
-               ;; Role execution phase - human turn
+                 ;; Role execution phase - human turn
                  (= (:phase game-data) :role-execution)
                  [role-execution-ui game-data]
 
-               ;; Role selection phase - human turn
+                 ;; Role selection phase - human turn
                  :else
                  [:div.roles-section-compact
                   [:h3 "🎭 Available Roles"]

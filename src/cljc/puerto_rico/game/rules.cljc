@@ -8,7 +8,11 @@
 ;; Role execution functions
 
 (defn execute-settler [game-state player-id plantation-choice]
-  "Execute the settler role - player gets to take a plantation from face-up tiles or a quarry"
+  "Execute the settler role - player gets to take a plantation from face-up tiles or a quarry
+   plantation-choice can be:
+   - A plantation type from face-up tiles
+   - :quarry
+   - :random-from-deck (for hacienda bonus draw)"
   (let [player-idx (->> (:players game-state)
                         (map-indexed vector)
                         (filter #(= (:id (second %)) player-id))
@@ -17,14 +21,47 @@
         player (get-in game-state [:players player-idx])
         face-up-plantations (:face-up-plantations game-state)
         quarry-supply (:quarry-supply game-state)
-        ;; Check if player has occupied hospice
-        has-hospice (has-occupied-building? player :hospice)]
+        plantation-deck (:plantation-supply game-state)
+        ;; Check if player has occupied buildings
+        has-hospice (has-occupied-building? player :hospice)
+        has-hacienda (has-occupied-building? player :hacienda)
+        has-construction-hut (has-occupied-building? player :construction-hut)]
     (cond
       ;; Invalid parameters
       (not (and plantation-choice player-idx
                 (>= player-idx 0)
                 (< player-idx (count (:players game-state)))))
       game-state
+
+      ;; Drawing random plantation from deck (hacienda bonus)
+      (= plantation-choice :random-from-deck)
+      (if (and has-hacienda (seq plantation-deck))
+        (let [drawn-plantation (first plantation-deck)
+              ;; Add plantation to player
+              game-after-draw (-> game-state
+                                  (update-in [:players player-idx :plantations]
+                                             conj {:type drawn-plantation :colonists 0})
+                                  (update :plantation-supply rest)
+                                  (update :plantation-supply vec))
+              ;; Apply hospice bonus if applicable
+              final-game (if has-hospice
+                           (let [colonist-supply (:colonist-supply game-after-draw)
+                                 colonist-ship (:colonist-ship game-after-draw)
+                                 plantation-count (count (get-in game-after-draw [:players player-idx :plantations]))
+                                 new-plantation-idx (dec plantation-count)]
+                             (cond
+                               (pos? colonist-supply)
+                               (-> game-after-draw
+                                   (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
+                                   (update :colonist-supply dec))
+                               (pos? colonist-ship)
+                               (-> game-after-draw
+                                   (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
+                                   (update :colonist-ship dec))
+                               :else game-after-draw))
+                           game-after-draw)]
+          final-game)
+        game-state)
 
       ;; Choosing a quarry
       (= plantation-choice :quarry)
@@ -734,9 +771,11 @@
                                                 (assoc :role-execution-current-idx nil)
                                                 (assoc :current-player-idx (state/next-player-idx game-state)))]
                               (cond
-                                ;; If Settler role just finished, replenish plantations
+                                ;; If Settler role just finished, replenish plantations and clear hacienda flags
                                 (= completed-role :settler)
-                                (replenish-plantations base-game)
+                                (-> base-game
+                                    replenish-plantations
+                                    (dissoc :hacienda-used))
                                 ;; If Captain role just finished, apply storage rules and empty full ships
                                 (= completed-role :captain)
                                 (-> base-game
