@@ -127,9 +127,15 @@
         player-id (:id current-player-data)]
     (when current-game
       (let [new-game-state (rules/select-role current-game player-id role)]
-        (add-log-entry (str "🎭 Selected " (name role) " role") (:name current-player-data))
-        (when (= role :prospector)
-          (add-log-entry (str "💰 Gained 1 doubloon from Prospector") (:name current-player-data)))
+        ;; Only log for human players (AI logs with score)
+        (when-not (:is-ai current-player-data)
+          (let [gold-on-role (get-in current-game [:role-gold role] 0)
+                role-msg (if (> gold-on-role 0)
+                           (str "🎭 Selected " (name role) " role (+" gold-on-role " gold)")
+                           (str "🎭 Selected " (name role) " role"))]
+            (add-log-entry role-msg (:name current-player-data))
+            (when (= role :prospector)
+              (add-log-entry (str "💰 Gained 1 doubloon from Prospector") (:name current-player-data)))))
         (swap! game-state assoc :game-state new-game-state)
 
         ;; Auto-execute roles that don't require player choices
@@ -148,7 +154,9 @@
           (let [new-game-state (-> current-game
                                    (rules/execute-role :settler player-id plantation-type)
                                    (rules/advance-role-execution))]
-            (add-log-entry (str "🌱 Took " (name plantation-type) " plantation") (:name executor-player))
+            ;; Only log for human players (AI logs with score)
+            (when-not (:is-ai executor-player)
+              (add-log-entry (str "🌱 Took " (name plantation-type) " plantation") (:name executor-player)))
             (swap! game-state assoc :game-state new-game-state)
             (js/console.log "Plantation chosen:" plantation-type "for player:" (:name executor-player) "New game state:" new-game-state)))))))
 
@@ -159,10 +167,21 @@
             player-id (:id executor-player)]
         (when (and executor-player player-id)
           (let [building-info (get state/buildings building-key)
+                base-cost (:cost building-info)
+                occupied-quarries (count (filter #(and (= (:type %) :quarry)
+                                                       (pos? (:colonists %)))
+                                                 (:plantations executor-player)))
+                actual-cost (max 1 (- base-cost (min occupied-quarries (dec base-cost))))
+                discount (- base-cost actual-cost)
                 new-game-state (-> current-game
                                    (rules/execute-role :builder player-id building-key)
                                    (rules/advance-role-execution))]
-            (add-log-entry (str "🏗️ Built " (name building-key) " for $" (:cost building-info)) (:name executor-player))
+            ;; Only log for human players (AI logs with score)
+            (when-not (:is-ai executor-player)
+              (let [cost-msg (if (> discount 0)
+                               (str " for $" actual-cost " (was $" base-cost ", -" discount " quarry discount)")
+                               (str " for $" actual-cost))]
+                (add-log-entry (str "🏗️ Built " (name building-key) cost-msg) (:name executor-player))))
             (swap! game-state assoc :game-state new-game-state)
             (js/console.log "Building chosen:" building-key "for player:" (:name executor-player) "New game state:" new-game-state)))))))
 
@@ -171,25 +190,39 @@
     (when current-game
       (let [executor-player (current-role-executor current-game)
             player-id (:id executor-player)
-            executor-idx (:role-execution-current-idx current-game)
-            ;; Capture money before trade (for trader role)
-            money-before (when (= role :trader) (:money executor-player))]
+            executor-idx (:role-execution-current-idx current-game)]
         (when (and executor-player player-id)
-          (let [new-game-state (-> current-game
+          (let [;; Capture state before action
+                money-before (:money executor-player)
+                vp-before (:victory-points executor-player)
+                goods-before (get-in executor-player [:goods good-type] 0)
+
+                ;; Execute role
+                new-game-state (-> current-game
                                    (rules/execute-role role player-id good-type)
                                    (rules/advance-role-execution))
-                ;; Calculate money gained for trader role (use executor index before advancement)
-                executor-after (when (and (= role :trader) executor-idx)
-                                 (nth (:players new-game-state) executor-idx))
-                money-after (when executor-after (:money executor-after))
-                money-gained (when (and money-before money-after) (- money-after money-before))
-                action-text (case role
-                              :trader (str "💰 Sold " (name good-type)
-                                           (when money-gained
-                                             (str " for " money-gained " doubloons")))
-                              :captain (str "🚢 Shipped " (name good-type))
-                              (str "Used " (name good-type)))]
-            (add-log-entry action-text (:name executor-player))
+
+                ;; Get updated player state
+                executor-after (nth (:players new-game-state) executor-idx)
+                money-after (:money executor-after)
+                vp-after (:victory-points executor-after)
+                goods-after (get-in executor-after [:goods good-type] 0)
+
+                ;; Calculate changes
+                money-gained (- money-after money-before)
+                vp-gained (- vp-after vp-before)
+                goods-shipped (- goods-before goods-after)]
+
+            ;; Only log for human players (AI logs with details)
+            (when-not (:is-ai executor-player)
+              (let [action-text (case role
+                                  :trader (str "💰 Sold " (name good-type)
+                                               " for " money-gained " doubloons")
+                                  :captain (str "🚢 Shipped " goods-shipped " " (name good-type)
+                                                " for " vp-gained " VP")
+                                  (str "Used " (name good-type)))]
+                (add-log-entry action-text (:name executor-player))))
+
             (swap! game-state assoc :game-state new-game-state)
             (js/console.log "Good chosen:" good-type "for role:" role "for player:" (:name executor-player) "New game state:" new-game-state)))))))
 
@@ -199,14 +232,16 @@
       (let [executor-player (current-role-executor current-game)
             player-id (:id executor-player)]
         (when (and executor-player player-id)
-          (let [new-game-state (rules/advance-role-execution current-game)
-                action-text (case role
-                              :trader "💼 Skipped trading (no goods)"
-                              :captain "⛵ Skipped shipping (no goods)"
-                              :builder "🔨 Skipped building (can't afford)"
-                              :settler "🚫 Skipped settler (no plantations)"
-                              "⏭️ Skipped")]
-            (add-log-entry action-text (:name executor-player))
+          (let [new-game-state (rules/advance-role-execution current-game)]
+            ;; Only log for human players (AI already logs its skip)
+            (when-not (:is-ai executor-player)
+              (let [action-text (case role
+                                  :trader "💼 Skipped trading (no goods)"
+                                  :captain "⛵ Skipped shipping (no goods)"
+                                  :builder "🔨 Skipped building (can't afford)"
+                                  :settler "🚫 Skipped settler (no plantations)"
+                                  "⏭️ Skipped")]
+                (add-log-entry action-text (:name executor-player))))
             (swap! game-state assoc :game-state new-game-state)
             (js/console.log "Player skipped role:" role "for player:" (:name executor-player))))))))
 
@@ -329,14 +364,13 @@
   (let [current-role (:selected-role game-data)
         executor (current-role-executor game-data)]
     (case current-role
-      :mayor
-      (do
-        (swap! game-state assoc :game-state (rules/execute-role game-data :mayor nil))
-        (swap! game-state update :game-state rules/advance-role-execution))
-
-      :craftsman
-      (do
-        (swap! game-state assoc :game-state (rules/execute-role game-data :craftsman nil))
+      (:mayor :craftsman)
+      ;; Only role selector executes for all players
+      (if (= (:role-execution-current-idx game-data) (:role-selector-idx game-data))
+        (do
+          (swap! game-state assoc :game-state (rules/execute-role game-data current-role nil))
+          (swap! game-state update :game-state rules/end-role-execution))
+        ;; Non-role-selectors just advance
         (swap! game-state update :game-state rules/advance-role-execution))
 
       :prospector
@@ -383,8 +417,14 @@
 
           ;; Update display and execute selection
           (reset! ai-action-display {:show true :player (:name ai-player)
-                                     :action (str "Selected " (name best-role) " role (score: " best-score ")")})
-          (add-log-entry (str "Selected " (name best-role) " role (score: " best-score ")") (:name ai-player))
+                                     :action (str "🎭 Selected " (name best-role) " role")})
+          (let [gold-on-role (get-in game-data [:role-gold best-role] 0)
+                role-msg (if (> gold-on-role 0)
+                           (str "🎭 Selected " (name best-role) " role (+" gold-on-role " gold, score: " (Math/round best-score) ")")
+                           (str "🎭 Selected " (name best-role) " role (score: " (Math/round best-score) ")"))]
+            (add-log-entry role-msg (:name ai-player))
+            (when (= best-role :prospector)
+              (add-log-entry (str "💰 Gained 1 doubloon from Prospector") (:name ai-player))))
           (js/setTimeout #(do
                             (reset! ai-action-display {:show false :player "" :action ""})
                             (handle-role-selection best-role)) 250))
@@ -427,8 +467,8 @@
                   (js/console.log (str "Selected: " (name best-choice) " (score: " best-score ")"))
 
                   (reset! ai-action-display {:show true :player (:name executor-player)
-                                             :action (str "Took " (name best-choice) " (score: " best-score ")")})
-                  (add-log-entry (str "Took " (name best-choice) " (score: " best-score ")") (:name executor-player))
+                                             :action (str "🌱 Took " (name best-choice) " plantation")})
+                  (add-log-entry (str "🌱 Took " (name best-choice) " plantation (score: " (Math/round best-score) ")") (:name executor-player))
                   (js/setTimeout #(do
                                     (reset! ai-action-display {:show false :player "" :action ""})
                                     (handle-plantation-choice best-choice)) 250))))
@@ -469,9 +509,19 @@
                     (js/console.log (str "  " (name b) ": " score)))
                   (js/console.log (str "Selected: " (name best-building) " (score: " best-score ")"))
 
-                  (reset! ai-action-display {:show true :player (:name executor-player)
-                                             :action (str "Built " building-name " (score: " best-score ")")})
-                  (add-log-entry (str "Built " building-name " (score: " best-score ")") (:name executor-player))
+                  ;; Calculate actual cost with quarry discount
+                  (let [base-cost (get-in state/buildings [best-building :cost])
+                        occupied-quarries (count (filter #(and (= (:type %) :quarry)
+                                                               (pos? (:colonists %)))
+                                                         (:plantations executor-player)))
+                        actual-cost (max 1 (- base-cost (min occupied-quarries (dec base-cost))))
+                        discount (- base-cost actual-cost)
+                        cost-msg (if (> discount 0)
+                                   (str " for $" actual-cost " (was $" base-cost ", -" discount " quarry discount)")
+                                   (str " for $" actual-cost))]
+                    (reset! ai-action-display {:show true :player (:name executor-player)
+                                               :action (str "🏗️ Built " building-name)})
+                    (add-log-entry (str "🏗️ Built " building-name cost-msg " (score: " (Math/round best-score) ")") (:name executor-player)))
                   (js/setTimeout #(do
                                     (reset! ai-action-display {:show false :player "" :action ""})
                                     (handle-building-choice best-building)) 250))
@@ -505,8 +555,13 @@
                   (js/console.log (str "Selected: " (name best-good) " (score: " best-score ")"))
 
                   (reset! ai-action-display {:show true :player (:name executor-player)
-                                             :action (str "Sold " (name best-good) " (score: " best-score ")")})
-                  (add-log-entry (str "Sold " (name best-good) " (score: " best-score ")") (:name executor-player))
+                                             :action (str "💰 Sold " (name best-good))})
+                  ;; Calculate trade value including bonuses
+                  (let [base-value (get {:corn 0 :indigo 1 :sugar 2 :tobacco 3 :coffee 4} best-good)
+                        has-office (state/has-occupied-building? executor-player :office)
+                        office-bonus (if has-office 1 0)
+                        total-value (+ base-value office-bonus)]
+                    (add-log-entry (str "💰 Sold " (name best-good) " for " total-value " doubloons (score: " (Math/round best-score) ")") (:name executor-player)))
                   (js/setTimeout #(do
                                     (reset! ai-action-display {:show false :player "" :action ""})
                                     (handle-good-choice best-good :trader)) 250))
@@ -540,39 +595,46 @@
                   (js/console.log (str "Selected: " (name best-good) " (score: " best-score ")"))
 
                   (reset! ai-action-display {:show true :player (:name executor-player)
-                                             :action (str "Shipped " (name best-good) " (score: " best-score ")")})
-                  (add-log-entry (str "Shipped " (name best-good) " (score: " best-score ")") (:name executor-player))
+                                             :action (str "🚢 Shipped " (name best-good))})
+                  ;; Calculate how many goods can be shipped
+                  (let [goods-amount (get-in executor-player [:goods best-good] 0)]
+                    (add-log-entry (str "🚢 Shipped " goods-amount " " (name best-good) " (score: " (Math/round best-score) ")") (:name executor-player)))
                   (js/setTimeout #(do
                                     (reset! ai-action-display {:show false :player "" :action ""})
                                     (handle-good-choice best-good :captain)) 250))
                 (do
-                  (reset! ai-action-display {:show true :player (:name executor-player) :action "Skipped captain (no goods)"})
-                  (add-log-entry "Skipped captain (no goods)" (:name executor-player))
+                  (reset! ai-action-display {:show true :player (:name executor-player) :action "⛵ Skipped shipping (no goods)"})
+                  (add-log-entry "⛵ Skipped shipping (no goods)" (:name executor-player))
                   (js/setTimeout #(do
                                     (reset! ai-action-display {:show false :player "" :action ""})
                                     (handle-skip-role :captain)) 250))))
 
             :prospector
             ;; Prospector auto-executes - only selector gets 1 gold
-            (let []
-              (reset! ai-action-display {:show true :player (:name executor-player)
-                                         :action "Gained 1 doubloon from Prospector"})
-              (add-log-entry "Gained 1 doubloon from Prospector" (:name executor-player))
+            (let [is-selector (= (:role-execution-current-idx game-data) (:role-selector-idx game-data))]
+              (when is-selector
+                (reset! ai-action-display {:show true :player (:name executor-player)
+                                           :action "💰 Gained 1 doubloon from Prospector"}))
+              ;; Don't log here - already logged when role was selected
               (js/setTimeout #(do
                                 (reset! ai-action-display {:show false :player "" :action ""})
                                 (handle-automatic-role-execution game-data)) 250))
 
             (:mayor :craftsman)
-            (let []
-              (reset! ai-action-display {:show true :player (:name executor-player) :action (str "Executed " (name selected-role))})
-              (add-log-entry (str "Executed " (name selected-role)) (:name executor-player))
-              (js/setTimeout #(do
-                                (reset! ai-action-display {:show false :player "" :action ""})
-                                (swap! game-state update :game-state
-                                       (fn [gd]
-                                         (when gd
-                                           (-> (rules/execute-role gd selected-role (:id executor-player))
-                                               (rules/end-role-execution)))))) 250))
+            ;; These roles execute for all players at once, only when role selector
+            (if (= (:role-execution-current-idx game-data) (:role-selector-idx game-data))
+              (let []
+                (reset! ai-action-display {:show true :player (:name executor-player) :action (str "Executed " (name selected-role))})
+                (add-log-entry (str "Executed " (name selected-role) " for all players") (:name executor-player))
+                (js/setTimeout #(do
+                                  (reset! ai-action-display {:show false :player "" :action ""})
+                                  (swap! game-state update :game-state
+                                         (fn [gd]
+                                           (when gd
+                                             (-> (rules/execute-role gd selected-role (:id executor-player))
+                                                 (rules/end-role-execution)))))) 250))
+              ;; Not role selector - skip to next player
+              (js/setTimeout #(swap! game-state update :game-state rules/advance-role-execution) 100))
 
             nil))))))
 
