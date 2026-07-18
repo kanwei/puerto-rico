@@ -143,9 +143,11 @@
       (let [executor-player (current-role-executor current-game)
             player-id (:id executor-player)]
         (when (and executor-player player-id)
-          (let [new-game-state (-> current-game
-                                   (rules/execute-role :settler player-id plantation-type)
-                                   (rules/advance-role-execution))]
+          (let [game-after (rules/execute-role current-game :settler player-id plantation-type)
+                ;; The hacienda bonus draw does not consume the regular take
+                new-game-state (if (= plantation-type :random-from-deck)
+                                 game-after
+                                 (rules/advance-role-execution game-after))]
             ;; Only log for human players (AI logs with score)
             (when-not (:is-ai executor-player)
               (add-log-entry (str "🌱 Took " (name plantation-type) " plantation") (:name executor-player)))

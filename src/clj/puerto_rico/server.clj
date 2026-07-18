@@ -10,7 +10,8 @@
             [cheshire.core :as json]
             [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]
-            [puerto-rico.ai.heuristic :as ai]))
+            [puerto-rico.ai.heuristic :as ai]
+            [puerto-rico.ai.mcts :as mcts]))
 
 ;; Game session storage (in production, use a proper database)
 (def game-sessions (atom {}))
@@ -56,9 +57,12 @@
         game-state (get @game-sessions game-id)
         current-player (state/current-player game-state)]
     (if (and game-state (:is-ai current-player))
-      (let [ai-move (ai/ai-select-move game-state
-                                       (:id current-player)
-                                       (:difficulty current-player :medium))
+      (let [ai-move (if (= (:difficulty current-player) :mcts)
+                      (mcts/ai-select-move game-state (:id current-player)
+                                           {:simulations 200})
+                      (ai/ai-select-move game-state
+                                         (:id current-player)
+                                         (:difficulty current-player :medium)))
             new-game-state (if ai-move
                              (rules/apply-move game-state ai-move)
                              game-state)]

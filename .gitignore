@@ -35,3 +35,7 @@
 resources/public/js/cljs-runtime
 resources/public/js/main.js
 .DS_Store
+.jj/
+/data
+/models
+train/.venv

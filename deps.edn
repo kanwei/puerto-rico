@@ -21,14 +21,16 @@
         org.clojure/core.async {:mvn/version "1.9.865"}
         org.clojure/math.combinatorics {:mvn/version "0.3.2"}
 
+        ;; Neural-network inference (AlphaZero-style AI)
+        com.microsoft.onnxruntime/onnxruntime {:mvn/version "1.20.0"}
+
 ;; ClojureScript React
         reagent/reagent {:mvn/version "2.0.1"}
         re-frame/re-frame {:mvn/version "1.4.7"}
         cljs-ajax/cljs-ajax {:mvn/version "0.8.4"}}
 
  :aliases
- {
-  :outdated {:extra-deps {com.github.liquidz/antq {:mvn/version "2.11.1276"}}
+ {:outdated {:extra-deps {com.github.liquidz/antq {:mvn/version "2.11.1276"}}
              :main-opts  ["-m" "antq.core"
                           "--exclude=metosin/ring-swagger-ui"
                           "--exclude=org.webjars.npm/tinymce"
@@ -45,6 +47,8 @@
           :main-opts ["-m" "nrepl.cmdline" "--port" "62000"]}
 
   :run-m {:main-opts ["-m" "puerto-rico.server"]}
+
+  :selfplay {:main-opts ["-m" "puerto-rico.ai.selfplay"]}
 
   :run-x {:ns-default puerto-rico.server
           :exec-fn start-server

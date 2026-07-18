@@ -66,13 +66,16 @@
       (or (nil? plantation-choice) (nil? player-idx) (island-full? player))
       game-state
 
-      ;; Drawing random plantation from deck (hacienda bonus).
+      ;; Drawing random plantation from deck (hacienda bonus, once per phase).
       ;; Rulebook: the hospice does NOT grant a colonist for this extra tile.
       (= plantation-choice :random-from-deck)
-      (if (and has-hacienda (seq plantation-deck))
+      (if (and has-hacienda
+               (seq plantation-deck)
+               (not (get-in game-state [:hacienda-used player-idx])))
         (-> game-state
             (place-plantation player-idx (first plantation-deck) false)
-            (update :plantation-supply (comp vec rest)))
+            (update :plantation-supply (comp vec rest))
+            (assoc-in [:hacienda-used player-idx] true))
         game-state)
 
       ;; Choosing a quarry (settler privilege or construction hut)
@@ -848,18 +851,23 @@
     :role-action
     (let [role (:role move)
           game-after (apply execute-role game-state role (:player-id move) (:args move))]
-      (case role
-        ;; Mayor and craftsman execute once for the whole table; prospector
-        ;; only affects the selector - end the role immediately
-        (:mayor :craftsman :prospector :prospector-2)
-        (end-role-execution game-after)
+      (if (and (= role :settler)
+               (= (first (:args move)) :random-from-deck))
+        ;; Hacienda bonus draw happens BEFORE the regular settler take:
+        ;; it does not consume the player's turn
+        game-after
+        (case role
+          ;; Mayor and craftsman execute once for the whole table; prospector
+          ;; only affects the selector - end the role immediately
+          (:mayor :craftsman :prospector :prospector-2)
+          (end-role-execution game-after)
 
-        ;; Captain: a turn that loaded nothing counts as a pass so the
-        ;; looping phase always terminates
-        :captain
-        (advance-role-execution (if (identical? game-after game-state)
-                                  (pass-captain-turn game-after)
-                                  game-after))
+          ;; Captain: a turn that loaded nothing counts as a pass so the
+          ;; looping phase always terminates
+          :captain
+          (advance-role-execution (if (identical? game-after game-state)
+                                    (pass-captain-turn game-after)
+                                    game-after))
 
-        (advance-role-execution game-after)))
+          (advance-role-execution game-after))))
     game-state))
