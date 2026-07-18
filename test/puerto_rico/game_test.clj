@@ -1,7 +1,440 @@
 (ns puerto-rico.game-test
+  "Rule tests pinned to the Rio Grande deluxe rulebook."
   (:require [clojure.test :refer [deftest is testing]]
-            [puerto-rico.game :as sut])) ; system under test
+            [puerto-rico.game.state :as state]
+            [puerto-rico.game.rules :as rules]
+            [puerto-rico.ai.heuristic :as ai]))
 
-(deftest a-test
-  (testing "FIXME, I fail."
-    (is (= 0 1))))
+;; ================================================================================
+;; Helpers
+;; ================================================================================
+
+(defn mk-players [n]
+  (mapv #(state/new-player (inc %) (str "P" (inc %))) (range n)))
+
+(defn mk-game [n]
+  (state/new-game-state (mk-players n)))
+
+(defn set-player [game idx player-updates]
+  (update-in game [:players idx] merge player-updates))
+
+(def empty-goods {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0})
+
+(defn goods [m] (merge empty-goods m))
+
+;; ================================================================================
+;; Setup
+;; ================================================================================
+
+(deftest setup-by-player-count
+  (testing "3 players: 6 role placards, no prospector, 2 doubloons, 75 VP"
+    (let [g (mk-game 3)]
+      (is (= 6 (count (:roles g))))
+      (is (not-any? #{:prospector :prospector-2} (:roles g)))
+      (is (every? #(= 2 (:money %)) (:players g)))
+      (is (= 75 (:victory-point-supply g)))
+      (is (= [4 5 6] (map :capacity (:ships g))))
+      (is (= 3 (:colonist-ship g)))))
+  (testing "4 players: 7 placards with one prospector, 3 doubloons, 100 VP"
+    (let [g (mk-game 4)]
+      (is (= 7 (count (:roles g))))
+      (is (some #{:prospector} (:roles g)))
+      (is (not-any? #{:prospector-2} (:roles g)))
+      (is (every? #(= 3 (:money %)) (:players g)))
+      (is (= 100 (:victory-point-supply g)))))
+  (testing "5 players: 8 placards with two prospectors, 4 doubloons, 126 VP"
+    (let [g (mk-game 5)]
+      (is (= 8 (count (:roles g))))
+      (is (some #{:prospector} (:roles g)))
+      (is (some #{:prospector-2} (:roles g)))
+      (is (every? #(= 4 (:money %)) (:players g)))
+      (is (= 126 (:victory-point-supply g))))))
+
+(deftest building-costs
+  (is (= 7 (get-in state/buildings [:factory :cost])))
+  (is (= 8 (get-in state/buildings [:university :cost]))))
+
+;; ================================================================================
+;; Builder
+;; ================================================================================
+
+(deftest builder-discounts
+  (testing "quarry discount plus builder privilege"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:money 5
+                               :plantations [{:type :quarry :colonists 1}
+                                             {:type :quarry :colonists 1}]})
+                (assoc :selected-role :builder :role-selector-idx 0))
+          g2 (rules/execute-builder g 1 :tobacco-maker)]
+      ;; tobacco storage costs 5, column 3: -2 quarries, -1 privilege = 2
+      (is (= 3 (get-in g2 [:players 0 :money])))
+      (is (= 1 (count (get-in g2 [:players 0 :buildings]))))))
+  (testing "quarry discount is capped by the building's column"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:money 10
+                               :plantations (vec (repeat 4 {:type :quarry :colonists 1}))})
+                (assoc :selected-role :builder :role-selector-idx 1))
+          cost (rules/building-cost g (get-in g [:players 0]) :small-market)]
+      ;; small market (cost 1, column 1): only 1 quarry counts, no privilege
+      (is (= 0 cost))))
+  (testing "cost floor is 0"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:money 10
+                               :plantations (vec (repeat 3 {:type :quarry :colonists 1}))})
+                (assoc :selected-role :builder :role-selector-idx 0))]
+      ;; construction hut (cost 2, column 1): -1 quarry -1 privilege = 0
+      (is (= 0 (rules/building-cost g (get-in g [:players 0]) :construction-hut)))))
+  (testing "building supply is decremented"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:money 10})
+                (assoc :selected-role :builder :role-selector-idx 1))
+          g2 (rules/execute-builder g 1 :hospice)]
+      (is (= 1 (get-in g2 [:building-supply :hospice])))))
+  (testing "cannot build a duplicate"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:money 10 :buildings [{:type :hospice :colonists 0}]}))]
+      (is (not (rules/can-build-building? g (get-in g [:players 0]) :hospice)))))
+  (testing "large buildings need 2 city spaces"
+    (let [eleven-buildings (vec (repeat 11 {:type :small-market :colonists 0}))
+          g (-> (mk-game 3)
+                (set-player 0 {:money 20 :buildings eleven-buildings}))]
+      (is (not (rules/can-build-building? g (get-in g [:players 0]) :guild-hall)))
+      (is (rules/can-build-building? g (get-in g [:players 0]) :office))))
+  (testing "university grants a colonist on the new building"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:money 10
+                               :buildings [{:type :university :colonists 1}]})
+                (assoc :selected-role :builder :role-selector-idx 1))
+          g2 (rules/execute-builder g 1 :hospice)
+          new-building (last (get-in g2 [:players 0 :buildings]))]
+      (is (= :hospice (:type new-building)))
+      (is (= 1 (:colonists new-building))))))
+
+;; ================================================================================
+;; Craftsman
+;; ================================================================================
+
+(deftest craftsman-production
+  (testing "multiple production buildings for one good sum their capacity"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:plantations (vec (repeat 3 {:type :indigo :colonists 1}))
+                               :buildings [{:type :small-indigo-maker :colonists 1}
+                                           {:type :large-indigo-maker :colonists 2}]})
+                (assoc :role-selector-idx 1))
+          g2 (rules/execute-craftsman g)]
+      (is (= 3 (get-in g2 [:players 0 :goods :indigo])))))
+  (testing "privilege takes the most valuable produced good"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:plantations [{:type :corn :colonists 1}
+                                             {:type :coffee :colonists 1}]
+                               :buildings [{:type :coffee-maker :colonists 1}]})
+                (assoc :role-selector-idx 0))
+          g2 (rules/execute-craftsman g)]
+      (is (= 1 (get-in g2 [:players 0 :goods :corn])))
+      (is (= 2 (get-in g2 [:players 0 :goods :coffee])))))
+  (testing "factory pays for kinds produced"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:money 0
+                               :plantations [{:type :corn :colonists 1}
+                                             {:type :indigo :colonists 1}]
+                               :buildings [{:type :small-indigo-maker :colonists 1}
+                                           {:type :factory :colonists 1}]})
+                (assoc :role-selector-idx 1))
+          g2 (rules/execute-craftsman g)]
+      ;; 2 kinds (corn + indigo) = 1 doubloon
+      (is (= 1 (get-in g2 [:players 0 :money]))))))
+
+;; ================================================================================
+;; Trader
+;; ================================================================================
+
+(deftest trader-rules
+  (testing "market bonuses stack and the selector gets the privilege"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:money 0
+                               :goods (goods {:coffee 1})
+                               :buildings [{:type :small-market :colonists 1}
+                                           {:type :large-market :colonists 1}]})
+                (assoc :role-selector-idx 0))
+          g2 (rules/execute-trader g 1 :coffee)]
+      ;; coffee 4 + small market 1 + large market 2 + privilege 1 = 8
+      (is (= 8 (get-in g2 [:players 0 :money])))))
+  (testing "trading house only buys different kinds, except with an occupied office"
+    (let [base (-> (mk-game 3)
+                   (assoc :trading-house [{:good :indigo :player-id 9}])
+                   (assoc :role-selector-idx 2))
+          without-office (set-player base 0 {:goods (goods {:indigo 1})})
+          with-office (set-player base 0 {:goods (goods {:indigo 1})
+                                          :buildings [{:type :office :colonists 1}]})]
+      (is (not (rules/can-trade-good? without-office (get-in without-office [:players 0]) :indigo)))
+      (is (rules/can-trade-good? with-office (get-in with-office [:players 0]) :indigo))))
+  (testing "a full trading house blocks sales until the END of the trader phase"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:goods (goods {:tobacco 1})})
+                (set-player 1 {:goods (goods {:indigo 1})})
+                (assoc :trading-house [{:good :corn :player-id 9}
+                                       {:good :sugar :player-id 9}
+                                       {:good :coffee :player-id 9}])
+                (assoc :selected-role :trader
+                       :role-selector-idx 0
+                       :role-execution-order [0 1 2]
+                       :role-execution-current-idx 0
+                       :phase :role-execution))
+          ;; P1 fills the house to 4
+          g2 (rules/execute-trader g 1 :tobacco)]
+      (is (= 4 (count (:trading-house g2))))
+      ;; P2 cannot sell into the full house mid-phase
+      (is (not (rules/can-trade-good? g2 (get-in g2 [:players 1]) :indigo)))
+      (is (= (get-in g2 [:players 1 :money])
+             (get-in (rules/execute-trader g2 2 :indigo) [:players 1 :money])))
+      ;; At the end of the phase the full house is emptied back to the supply
+      (let [g3 (rules/end-role-execution g2)]
+        (is (empty? (:trading-house g3)))))))
+
+;; ================================================================================
+;; Captain
+;; ================================================================================
+
+(defn captain-game
+  "3-player game in captain phase; selector is player index 0."
+  [& {:keys [ships] :or {ships [{:capacity 4 :good nil :amount 0}
+                                {:capacity 5 :good nil :amount 0}
+                                {:capacity 6 :good nil :amount 0}]}}]
+  (-> (mk-game 3)
+      (assoc :ships ships
+             :selected-role :captain
+             :role-selector-idx 0
+             :role-execution-order [0 1 2]
+             :role-execution-current-idx 0
+             :phase :role-execution)))
+
+(deftest captain-ship-selection
+  (testing "partial load on the biggest empty ship when nothing fits everything"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 8})}))
+          g2 (rules/execute-captain g 1 :corn)]
+      ;; 8 corn, biggest empty ship holds 6: load 6, keep 2
+      (is (= 2 (get-in g2 [:players 0 :goods :corn])))
+      (is (= {:capacity 6 :good :corn :amount 6} (nth (:ships g2) 2)))
+      ;; 6 base VP + 1 captain privilege
+      (is (= 7 (get-in g2 [:players 0 :victory-points])))))
+  (testing "smallest empty ship that fits everything"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 4})}))
+          g2 (rules/execute-captain g 1 :corn)]
+      (is (= {:capacity 4 :good :corn :amount 4} (nth (:ships g2) 0)))))
+  (testing "a ship already carrying the good MUST be used"
+    (let [g (-> (captain-game :ships [{:capacity 4 :good :corn :amount 2}
+                                      {:capacity 5 :good nil :amount 0}
+                                      {:capacity 6 :good nil :amount 0}])
+                (set-player 0 {:goods (goods {:corn 5})}))
+          g2 (rules/execute-captain g 1 :corn)]
+      ;; only 2 spaces left on the corn ship
+      (is (= 3 (get-in g2 [:players 0 :goods :corn])))
+      (is (= 4 (get-in (:ships g2) [0 :amount])))))
+  (testing "a full ship carrying the good means the good cannot be shipped"
+    (let [ships [{:capacity 4 :good :corn :amount 4}
+                 {:capacity 5 :good nil :amount 0}
+                 {:capacity 6 :good nil :amount 0}]
+          g (-> (captain-game :ships ships)
+                (set-player 0 {:goods (goods {:corn 3})
+                               :buildings [{:type :harbor :colonists 1}]}))
+          g2 (rules/execute-captain g 1 :corn)]
+      (is (nil? (rules/find-ship-for-good ships :corn 3)))
+      ;; no load happened: no goods moved, no VP (not even harbor/privilege)
+      (is (= 3 (get-in g2 [:players 0 :goods :corn])))
+      (is (= 0 (get-in g2 [:players 0 :victory-points])))))
+  (testing "captain privilege is +1 VP once; harbor is +1 VP per load"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 2 :indigo 3})
+                               :buildings [{:type :harbor :colonists 1}]}))
+          g2 (rules/execute-captain g 1 :corn)   ;; 2 + harbor 1 + privilege 1
+          g3 (rules/execute-captain g2 1 :indigo)] ;; 3 + harbor 1
+      (is (= 4 (get-in g2 [:players 0 :victory-points])))
+      (is (= 8 (get-in g3 [:players 0 :victory-points]))))))
+
+(deftest captain-wharf
+  (testing "wharf ships all goods of one kind to the supply, once per phase"
+    (let [g (-> (captain-game :ships [{:capacity 4 :good :corn :amount 4}
+                                      {:capacity 5 :good :indigo :amount 5}
+                                      {:capacity 6 :good :sugar :amount 6}])
+                (set-player 1 {:goods (goods {:tobacco 5 :coffee 2})
+                               :buildings [{:type :wharf :colonists 1}]}))
+          supply-before (get-in g [:goods-supply :tobacco])
+          g2 (rules/execute-captain g 2 :tobacco :wharf)]
+      (is (= 0 (get-in g2 [:players 1 :goods :tobacco])))
+      (is (= 5 (get-in g2 [:players 1 :victory-points])))
+      (is (= (+ supply-before 5) (get-in g2 [:goods-supply :tobacco])))
+      ;; second use in the same phase is rejected
+      (is (identical? g2 (rules/execute-captain g2 2 :coffee :wharf))))))
+
+(deftest captain-phase-loops
+  (testing "players get multiple loading turns until nobody can load"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 2 :indigo 3})}))
+          ;; P1 loads corn (P2 and P3 have nothing, get skipped), P1 loads again
+          g2 (rules/apply-move g {:type :role-action :role :captain :player-id 1 :args [:corn]})]
+      (is (= :role-execution (:phase g2)))
+      (is (= 0 (:role-execution-current-idx g2)))
+      (let [g3 (rules/apply-move g2 {:type :role-action :role :captain :player-id 1 :args [:indigo]})]
+        ;; after the second load nobody can act - phase over
+        (is (not= :role-execution (:phase g3)))
+        (is (= 0 (get-in g3 [:players 0 :goods :corn])))
+        (is (= 0 (get-in g3 [:players 0 :goods :indigo])))
+        ;; 2 + privilege 1 + 3
+        (is (= 6 (get-in g3 [:players 0 :victory-points])))))))
+
+(deftest captain-storage
+  (testing "no warehouse: keep exactly one single good"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 3 :coffee 2})}))
+          g2 (rules/end-role-execution g)]
+      (is (= (goods {:coffee 1}) (get-in g2 [:players 0 :goods])))))
+  (testing "small warehouse: all of ONE kind plus one single good"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 3 :coffee 2 :indigo 1})
+                               :buildings [{:type :small-warehouse :colonists 1}]}))
+          g2 (rules/end-role-execution g)]
+      ;; keep all 3 corn (most barrels) + 1 coffee (most valuable remainder)
+      (is (= (goods {:corn 3 :coffee 1}) (get-in g2 [:players 0 :goods])))))
+  (testing "large warehouse: all of TWO kinds plus one single good"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 3 :coffee 2 :indigo 1})
+                               :buildings [{:type :large-warehouse :colonists 1}]}))
+          g2 (rules/end-role-execution g)]
+      (is (= (goods {:corn 3 :coffee 2 :indigo 1}) (get-in g2 [:players 0 :goods])))))
+  (testing "discarded goods return to the supply"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 3})}))
+          supply-before (get-in g [:goods-supply :corn])
+          g2 (rules/end-role-execution g)]
+      (is (= (+ supply-before 2) (get-in g2 [:goods-supply :corn]))))))
+
+;; ================================================================================
+;; Mayor
+;; ================================================================================
+
+(deftest mayor-distribution
+  (testing "ship colonists are dealt starting with the mayor, plus supply privilege"
+    (let [g (-> (mk-game 3)
+                (assoc :governor-idx 0
+                       :role-selector-idx 2   ;; P3 is the mayor
+                       :colonist-ship 4))
+          g2 (rules/execute-mayor g)
+          totals (mapv state/count-total-colonists (:players g2))]
+      ;; deal order: P3 P1 P2 P3 -> P3 gets 2 (+1 privilege), P1 1, P2 1
+      (is (= [1 1 3] totals))))
+  (testing "ship refill: one per empty building circle, minimum player count"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:buildings [{:type :large-indigo-maker :colonists 0}
+                                           {:type :coffee-maker :colonists 0}]})
+                (assoc :role-selector-idx 0 :colonist-ship 0))
+          g2 (rules/execute-mayor g)]
+      ;; the privilege colonist is auto-placed on the indigo plantation (chain
+      ;; scoring), so all 5 building circles (3 + 2) stay empty; refill =
+      ;; max(5, 3) = 5
+      (is (= 5 (:colonist-ship g2)))))
+  (testing "a refill shortfall triggers the game-end condition"
+    (let [g (-> (mk-game 3)
+                (assoc :role-selector-idx 0 :colonist-ship 0 :colonist-supply 2))
+          g2 (rules/execute-mayor g)]
+      (is (:colonist-ship-shortfall g2))
+      (is (state/check-victory-conditions g2)))))
+
+;; ================================================================================
+;; Settler
+;; ================================================================================
+
+(deftest settler-rules
+  (let [base (-> (mk-game 3)
+                 (assoc :face-up-plantations [:coffee :sugar :tobacco :corn]
+                        :selected-role :settler
+                        :role-selector-idx 0
+                        :role-execution-order [0 1 2]
+                        :role-execution-current-idx 0
+                        :phase :role-execution))]
+    (testing "only the settler may take a quarry"
+      (let [g2 (rules/execute-settler base 2 :quarry)]
+        (is (= 1 (count (get-in g2 [:players 1 :plantations]))))) ;; unchanged (initial indigo)
+      (let [g2 (rules/execute-settler base 1 :quarry)]
+        (is (some #(= (:type %) :quarry) (get-in g2 [:players 0 :plantations])))))
+    (testing "an occupied construction hut allows a quarry"
+      (let [g (set-player base 1 {:buildings [{:type :construction-hut :colonists 1}]})
+            g2 (rules/execute-settler g 2 :quarry)]
+        (is (some #(= (:type %) :quarry) (get-in g2 [:players 1 :plantations])))))
+    (testing "a full island takes no more tiles"
+      (let [g (set-player base 0 {:plantations (vec (repeat 12 {:type :corn :colonists 0}))})
+            g2 (rules/execute-settler g 1 :coffee)]
+        (is (= 12 (count (get-in g2 [:players 0 :plantations]))))))
+    (testing "hospice grants a colonist for the regular take but NOT the hacienda draw"
+      (let [g (set-player base 0 {:buildings [{:type :hospice :colonists 1}
+                                              {:type :hacienda :colonists 1}]})
+            regular (rules/execute-settler g 1 :coffee)
+            hacienda-draw (rules/execute-settler g 1 :random-from-deck)]
+        (is (= 1 (:colonists (last (get-in regular [:players 0 :plantations])))))
+        (is (= 0 (:colonists (last (get-in hacienda-draw [:players 0 :plantations])))))))))
+
+;; ================================================================================
+;; Scoring and round flow
+;; ================================================================================
+
+(deftest residence-scores-four-below-nine-spaces
+  (let [player (-> (state/new-player 1 "P1")
+                   (assoc :plantations (vec (repeat 5 {:type :corn :colonists 0}))
+                          :buildings [{:type :residence :colonists 1}]))]
+    ;; residence 4 VP + bonus 4 VP for <= 9 filled spaces
+    (is (= 8 (state/calculate-victory-points player)))))
+
+(deftest tiebreaker-uses-money-and-goods
+  (let [poor (-> (state/new-player 1 "poor") (assoc :money 1))
+        rich (-> (state/new-player 2 "rich") (assoc :money 4 :goods (goods {:corn 2})))]
+    (is (= 1 (state/tiebreaker-value poor)))
+    (is (= 6 (state/tiebreaker-value rich)))))
+
+(deftest round-flow
+  (testing "unpicked roles gain gold and the governor rotates"
+    (let [g (mk-game 3)
+          ;; each player picks a role and finishes it (prospector-free 3P set)
+          play-role (fn [game role]
+                      (let [pid (:id (state/current-player game))
+                            game (rules/select-role game pid role)]
+                        ;; skip through every player's execution turn
+                        (loop [gs game safety 0]
+                          (if (or (not= :role-execution (:phase gs)) (> safety 20))
+                            gs
+                            (recur (rules/apply-move gs {:type :role-action
+                                                         :role role
+                                                         :player-id (:id (nth (:players gs) (:role-execution-current-idx gs)))
+                                                         :args []})
+                                   (inc safety))))))
+          g2 (-> g (play-role :settler) (play-role :trader) (play-role :captain))]
+      (is (= 2 (:round g2)))
+      (is (= 1 (:governor-idx g2)))
+      (is (= 1 (:current-player-idx g2)))
+      ;; exactly the 3 unpicked roles carry a doubloon
+      (is (= {:settler 0 :mayor 1 :builder 1 :craftsman 1 :trader 0 :captain 0}
+             (:role-gold g2))))))
+
+;; ================================================================================
+;; Full-game smoke test: heuristic AI vs itself must reach game over
+;; ================================================================================
+
+(deftest full-game-smoke-test
+  (dotimes [_ 3]
+    (let [result
+          (with-out-str
+            (loop [g (mk-game 3) steps 0]
+              (cond
+                (:game-over g) (println "DONE")
+                (> steps 5000) (println "STALLED")
+                :else
+                (let [actor-idx (if (= :role-execution (:phase g))
+                                  (:role-execution-current-idx g)
+                                  (:current-player-idx g))
+                      actor-id (:id (nth (:players g) actor-idx))
+                      move (ai/ai-select-move g actor-id)]
+                  (if (nil? move)
+                    (println "NO-MOVE at" (:phase g))
+                    (recur (rules/apply-move g move) (inc steps)))))))]
+      (is (.contains ^String result "DONE")
+          (str "game did not finish: " result)))))

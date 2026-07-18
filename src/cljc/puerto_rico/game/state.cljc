@@ -37,9 +37,9 @@
                      :description "The owner of an occupied large warehouse may store, at the end of the captain phase, in addition to the single goods barrel he is allowed to store on his wind rose, all the barrels of two kinds of goods that he chooses."}
 
    ;; Trade Buildings - Column 3
-   :factory {:type :production :cost 8 :vp 3 :worker 1 :count 2 :column 3
+   :factory {:type :production :cost 7 :vp 3 :worker 1 :count 2 :column 3
              :description "If the owner of an occupied factory produces goods of more than one kind in the craftsman phase, he earns money from the bank: for two kinds of goods, he earns 1 doubloon, for three kinds of goods, he earns 2 doubloons, for four kinds of goods, he earns 3 doubloons, and for all five kinds of goods, he earns 5 doubloons."}
-   :university {:type :building :cost 7 :vp 3 :worker 1 :count 2 :column 3
+   :university {:type :building :cost 8 :vp 3 :worker 1 :count 2 :column 3
                 :description "During the builder phase, when the owner of an occupied university builds a building in his city, he may take a colonist from the colonist supply and place it on this tile."}
    :harbor {:type :shipping :cost 8 :vp 3 :worker 1 :count 2 :column 3
             :description "Each time, during the captain phase, the owner of an occupied harbour loads goods on a cargo ship, he earns one extra victory point."}
@@ -60,6 +60,15 @@
 
 (def roles [:settler :mayor :builder :craftsman :trader :captain :prospector])
 
+(defn roles-for-player-count
+  "Role placards in play: 3 players use no prospector, 4 players one, 5 players two."
+  [num-players]
+  (case num-players
+    3 [:settler :mayor :builder :craftsman :trader :captain]
+    4 [:settler :mayor :builder :craftsman :trader :captain :prospector]
+    5 [:settler :mayor :builder :craftsman :trader :captain :prospector :prospector-2]
+    [:settler :mayor :builder :craftsman :trader :captain :prospector]))
+
 (def plantation-tiles
   {:corn 10 :indigo 12 :sugar 11 :tobacco 9 :coffee 8 :quarry 8})
 
@@ -75,9 +84,9 @@
   "Create the order in which players execute a role, starting with the role selector"
   [game-state role-selector-idx]
   (let [player-count (count (:players game-state))]
-    (take player-count
-          (map #(mod % player-count)
-               (range role-selector-idx (+ role-selector-idx player-count))))))
+    (vec (take player-count
+               (map #(mod % player-count)
+                    (range role-selector-idx (+ role-selector-idx player-count)))))))
 
 ;; Player state structure
 (defn new-player
@@ -100,6 +109,8 @@
 (defn new-game-state
   [players]
   (let [num-players (count players)
+        ;; Starting money equals doubloons per rulebook: 3P=2, 4P=3, 5P=4
+        starting-money (case num-players 3 2, 4 3, 5 4, 2)
         ;; Set up initial plantations according to rules
         players-with-plantations
         (vec (map-indexed
@@ -113,11 +124,13 @@
                                    (and (= num-players 5) (>= idx 3)) :corn
                                    (and (= num-players 5) (= idx 1)) :indigo
                                    (and (= num-players 5) (= idx 2)) :indigo
-                                   :else nil)]
+                                   :else nil)
+                      player (assoc player :money starting-money)]
                   (if plantation
                     (assoc player :plantations [{:type plantation :colonists 0}])
                     player)))
               players))
+        game-roles (roles-for-player-count num-players)
         ;; Calculate plantation supply after initial distribution
         initial-plantations (map (fn [idx]
                                    (cond
@@ -154,10 +167,11 @@
      :role-selector-idx nil
      :role-execution-order nil
      :role-execution-current-idx nil
-     :available-roles (set roles)
+     :roles game-roles
+     :available-roles (set game-roles)
      :used-roles #{}
      ;; Track gold coins on each role card
-     :role-gold (into {} (map #(vector % 0) roles))
+     :role-gold (into {} (map #(vector % 0) game-roles))
      ;; Track how many players have selected roles this round
      :players-selected-this-round 0
      :plantation-supply remaining-deck
@@ -176,8 +190,8 @@
      :victory-point-supply (case num-players
                              3 75
                              4 100
-                             5 122
-                             122) ; default to full supply
+                             5 126
+                             126) ; default to full supply
      :ships (case num-players
               3 [{:capacity 4 :good nil :amount 0}
                  {:capacity 5 :good nil :amount 0}
@@ -207,6 +221,27 @@
   (->> (:players game-state)
        (filter #(= (:id %) player-id))
        first))
+
+(defn player-index
+  "Index of the player with the given id in the players vector, or nil"
+  [game-state player-id]
+  (->> (:players game-state)
+       (map-indexed vector)
+       (filter #(= (:id (second %)) player-id))
+       ffirst))
+
+(defn city-slots-used
+  "City spaces occupied by a player's buildings; large buildings take 2 spaces"
+  [player]
+  (reduce (fn [slots building]
+            (+ slots (if (= (get-in buildings [(:type building) :type]) :large) 2 1)))
+          0
+          (:buildings player)))
+
+(defn tiebreaker-value
+  "Rulebook tiebreaker: doubloons plus goods (1 good = 1 doubloon)"
+  [player]
+  (+ (:money player) (reduce + (vals (:goods player)))))
 
 (defn next-player-idx [game-state]
   (mod (inc (:current-player-idx game-state))
@@ -265,8 +300,8 @@
                               (>= filled-spaces 12) 7
                               (>= filled-spaces 11) 6
                               (>= filled-spaces 10) 5
-                              (>= filled-spaces 9) 4
-                              :else 0))
+                              ;; Rulebook: "up to nine filled island spaces" earns 4 VP
+                              :else 4))
                           0)
         fortress-bonus (if (has-occupied-building? player :fortress)
                          (quot (count-total-colonists player) 3)
@@ -280,24 +315,14 @@
     (+ guild-hall-bonus residence-bonus fortress-bonus customs-house-bonus city-hall-bonus)))
 
 ;; Victory condition checks
-(defn check-victory-conditions [game-state]
-  (let [players (:players game-state)
-        has-full-city (some (fn [player]
-                              (let [regular-buildings (filter #(not= (get-in buildings [(:type %) :type]) :large)
-                                                              (:buildings player))
-                                    large-buildings (filter #(= (get-in buildings [(:type %) :type]) :large)
-                                                            (:buildings player))
-                                    city-slots-used (+ (count regular-buildings) (* 2 (count large-buildings)))]
-                                (>= city-slots-used 12)))
-                            players)
-        colonists-exhausted (<= (:colonist-supply game-state) 0)
+(defn check-victory-conditions
+  "Game ends at the end of the round in which: a player fills all 12 city spaces,
+   the mayor could not fully refill the colonist ship, or the VP supply is exhausted."
+  [game-state]
+  (let [has-full-city (some #(>= (city-slots-used %) 12) (:players game-state))
+        colonist-shortfall (:colonist-ship-shortfall game-state)
         vp-exhausted (<= (:victory-point-supply game-state) 0)]
-    (when (or has-full-city colonists-exhausted vp-exhausted)
-      (println "GAME END TRIGGERED:"
-               (cond has-full-city "city filled (12 slots used)"
-                     colonists-exhausted "colonists exhausted"
-                     vp-exhausted "victory points exhausted")))
-    (or has-full-city colonists-exhausted vp-exhausted)))
+    (or has-full-city colonist-shortfall vp-exhausted)))
 
 (defn calculate-victory-points-breakdown [player]
   "Calculate victory points with detailed breakdown for game over screen"
@@ -319,8 +344,8 @@
                               (>= filled-spaces 12) 7
                               (>= filled-spaces 11) 6
                               (>= filled-spaces 10) 5
-                              (>= filled-spaces 9) 4
-                              :else 0))
+                              ;; Rulebook: "up to nine filled island spaces" earns 4 VP
+                              :else 4))
                           0)
         fortress-bonus (if (has-occupied-building? player :fortress)
                          (quot (count-total-colonists player) 3)

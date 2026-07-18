@@ -32,21 +32,6 @@
         can-ship? (and has-goods? (rules/can-ship-goods? game-state player))
         can-produce? (rules/can-produce-goods? game-state player)]
 
-    ;; Debug logging for first few turns (works in both CLJ and CLJS)
-    (when (< (:turn game-state 0) 3)
-      #?(:clj (println (str "Player " player-id " evaluating " (name role) ":"
-                            " goods=" total-goods
-                            " money=" money
-                            " can-trade?=" can-trade?
-                            " can-ship?=" can-ship?
-                            " can-produce?=" can-produce?))
-         :cljs (js/console.log (str "Player " player-id " evaluating " (name role) ":"
-                                    " goods=" total-goods
-                                    " money=" money
-                                    " can-trade?=" can-trade?
-                                    " can-ship?=" can-ship?
-                                    " can-produce?=" can-produce?))))
-
     (case role
       :captain
       (if (not can-ship?)
@@ -83,7 +68,7 @@
         -90 ; Avoid if island is full
         (+ 5 (if (< (count plantations) 8) 8 2))) ; Bonus early game
 
-      :prospector
+      (:prospector :prospector-2)
       (if (< money 5)
         8 ; Good when poor
         2) ; Less valuable when rich
@@ -123,7 +108,9 @@
   "Score a plantation based on its strategic value"
   [game-state player plantation-type]
   (let [buildings (:buildings player)
-        has-matching-production (some #(= (:good %) plantation-type) buildings)
+        has-matching-production (some #(= (get-in state/buildings [(:type %) :good])
+                                          plantation-type)
+                                      buildings)
         corn-count (count (filter #(= (:type %) :corn) (:plantations player)))
         sugar-count (count (filter #(= (:type %) :sugar) (:plantations player)))
         coffee-count (count (filter #(= (:type %) :coffee) (:plantations player)))
@@ -171,19 +158,14 @@
 (defn evaluate-building-synergy
   "Evaluate how well a building fits with current strategy"
   [game-state player building-key building-info]
-  (let [money (:money player)
-        ;; Calculate cost with quarry discounts (1 doubloon per occupied quarry, max discount = cost-1)
-        occupied-quarries (count (filter #(and (= (:type %) :quarry
-                                                  (pos? (:colonists %))))
-                                         (:plantations player)))
-        base-cost (:cost building-info)
-        actual-cost (max 1 (- base-cost (min occupied-quarries (dec base-cost))))
-        can-afford? (>= money actual-cost)
+  (let [actual-cost (rules/building-cost game-state player building-key)
         buildings-owned (set (map :type (:buildings player)))
         plantations-owned (set (map :type (:plantations player)))
-        game-turn (or (:turn game-state) 0)]
-    (if (not can-afford?)
-      -1000 ; Can't afford it
+        game-round (or (:round game-state) 1)
+        ;; Kinds of goods the player has production buildings for
+        production-kinds (count (filter #(get-in state/buildings [% :good]) buildings-owned))]
+    (if (not (rules/can-build-building? game-state player building-key))
+      -1000 ; Can't afford it (or no supply/space/duplicate)
       (+ (case building-key
            ;; Production buildings - fixed names to match actual game
            :small-indigo-maker (if (plantations-owned :indigo) 50 0)
@@ -200,31 +182,31 @@
            :coffee-maker (if (plantations-owned :coffee) 75 0)
 
            ;; Small economic buildings (early game)
-           :small-market (if (< game-turn 8) 45 20)
+           :small-market (if (< game-round 6) 45 20)
            :hacienda (if (< (count (:plantations player)) 8) 40 10)
            :construction-hut (if (< (count (:buildings player)) 6) 35 10)
            :small-warehouse 30
 
            ;; Large economic buildings (mid-late game)
-           :hospice (if (> game-turn 5) 60 20)
+           :hospice (if (> game-round 4) 60 20)
            :office 50
            :large-market (if (buildings-owned :small-market) 55 30)
            :large-warehouse 35
-           :factory (if (>= (count (filter #(:good %) buildings-owned)) 3) 80 20)
+           :factory (if (>= production-kinds 3) 80 20)
            :university 40
-           :harbor (if (> game-turn 8) 50 20)
-           :wharf (if (> game-turn 10) 60 25)
+           :harbor (if (> game-round 6) 50 20)
+           :wharf (if (> game-round 7) 60 25)
 
            ;; Victory point buildings (late game)
-           :guild-hall (if (> game-turn 12) 90 30)
-           :residence (if (> game-turn 12) 85 25)
-           :fortress (if (> game-turn 12) 80 20)
-           :customs-house (if (> game-turn 12) 75 15)
-           :city-hall (if (> game-turn 12) 70 10)
+           :guild-hall (if (>= game-round 9) 90 30)
+           :residence (if (>= game-round 9) 85 25)
+           :fortress (if (>= game-round 9) 80 20)
+           :customs-house (if (>= game-round 9) 75 15)
+           :city-hall (if (>= game-round 9) 70 10)
 
            0)
-         ;; Adjust for cost-effectiveness
-         (- (/ 100 (inc actual-cost)))))))
+         ;; Cost-effectiveness bonus: cheaper (after discounts) is better
+         (/ 50 (inc actual-cost))))))
 
 (defn select-best-building
   "Choose the best building to construct"
@@ -254,22 +236,13 @@
 (defn evaluate-trade-value
   "Score a good for trading based on its value and scarcity"
   [game-state player good-type]
-  (let [base-value (case good-type
-                     :corn 0 ; Never trade corn
-                     :indigo 1
-                     :sugar 2
-                     :tobacco 3
-                     :coffee 4
-                     0)
+  (let [base-value (get rules/good-values good-type 0)
         good-count (get-in player [:goods good-type] 0)
-        trading-house-count (count (filter #(= % good-type) (:trading-house game-state)))
-        has-office? (some #(= (:type %) :office) (:buildings player))
-        has-small-market? (some #(= (:type %) :small-market) (:buildings player))
-        has-large-market? (some #(= (:type %) :large-market) (:buildings player))
+        has-small-market? (rules/has-occupied-building? player :small-market)
+        has-large-market? (rules/has-occupied-building? player :large-market)
         bonus-money (+ (if has-small-market? 1 0)
                        (if has-large-market? 2 0))]
-    (if (or (zero? good-count)
-            (and (pos? trading-house-count) (not has-office?)))
+    (if (not (rules/can-trade-good? game-state player good-type))
       -100 ; Can't trade this good
       (+ (* base-value 20)
          (* bonus-money 10)
@@ -292,33 +265,21 @@
 ;; ================================================================================
 
 (defn evaluate-shipping-option
-  "Score a shipping choice based on victory points and strategic value"
+  "Score a shipping choice by the VP it actually earns (goods loadable on the
+   ship the rules force this good onto)"
   [game-state player good-type]
   (let [good-count (get-in player [:goods good-type] 0)
-        has-harbor? (some #(= (:type %) :harbor) (:buildings player))
-        has-wharf? (some #(= (:type %) :wharf) (:buildings player))
-        base-vp good-count
-        bonus-vp (if has-harbor? 1 0)
-        ; Find best available ship for this good
-        available-ship (first (filter #(and (or (= (:good %) good-type)
-                                                (nil? (:good %)))
-                                            (< (:amount %) (:capacity %)))
-                                      (:ships game-state)))
-        can-ship? (or available-ship has-wharf?)]
-    (if (or (zero? good-count) (not can-ship?))
+        has-harbor? (rules/has-occupied-building? player :harbor)
+        ship-entry (when (pos? good-count)
+                     (rules/find-ship-for-good (:ships game-state) good-type good-count))]
+    (if (nil? ship-entry)
       -100 ; Can't ship this good
-      (+ (* base-vp 10)
-         (* bonus-vp 5)
-         ;; Prefer to ship goods we have a lot of
-         (if (> good-count 5) 20 0)
-         ;; Slight preference for higher value goods to clear storage
-         (case good-type
-           :coffee 5
-           :tobacco 4
-           :sugar 3
-           :indigo 2
-           :corn 1
-           0)))))
+      (let [[_ ship] ship-entry
+            loadable (min good-count (- (:capacity ship) (:amount ship)))]
+        (+ (* loadable 10)
+           (if has-harbor? 5 0)
+           ;; Slight preference for higher value goods to clear storage
+           (get rules/good-values good-type 0))))))
 
 (defn select-best-shipping
   "Choose the best good to ship for captain phase"
@@ -337,7 +298,9 @@
 ;; ================================================================================
 
 (defn get-heuristic-move
-  "Generate the best move using heuristics for the current game state"
+  "Generate the best move using heuristics for the current game state.
+   Returns a role keyword (role selection), a choice keyword, a captain args
+   vector like [:corn :wharf], :execute for no-choice roles, or nil to pass."
   [game-state player-id]
   (case (:phase game-state)
     :role-selection
@@ -346,20 +309,20 @@
 
     :role-execution
     (let [role (:selected-role game-state)
-          player (state/player-by-id game-state player-id)]
+          player (state/player-by-id game-state player-id)
+          player-idx (state/player-index game-state player-id)]
       (case role
         :settler
-        (let [available-plantations (concat (:face-up-plantations game-state)
-                                            (if (pos? (:quarry-supply game-state))
-                                              [:quarry] []))]
-          (select-best-plantation game-state player available-plantations))
+        (when-not (rules/island-full? player)
+          (let [available-plantations (concat (distinct (:face-up-plantations game-state))
+                                              (when (and (pos? (:quarry-supply game-state))
+                                                         (rules/may-take-quarry? game-state player-idx))
+                                                [:quarry]))]
+            (select-best-plantation game-state player available-plantations)))
 
         :builder
-        (let [available-buildings (keys (filter (fn [[building-key count]]
-                                                  (and (pos? count)
-                                                       (let [building-info (get state/buildings building-key)]
-                                                         (rules/can-build-building? player building-key building-info))))
-                                                (:building-supply game-state)))]
+        (let [available-buildings (filter #(rules/can-build-building? game-state player %)
+                                          (keys state/buildings))]
           (select-best-building game-state player available-buildings))
 
         :trader
@@ -368,9 +331,20 @@
           (select-best-trade game-state player tradeable-goods))
 
         :captain
-        (let [shippable-goods (filter #(pos? (get-in player [:goods %] 0))
+        (let [shippable-goods (filter #(and (pos? (get-in player [:goods %] 0))
+                                            (rules/find-ship-for-good (:ships game-state) %
+                                                                      (get-in player [:goods %] 0)))
                                       (keys (:goods-supply game-state)))]
-          (select-best-shipping game-state player shippable-goods))
+          (if (seq shippable-goods)
+            (select-best-shipping game-state player shippable-goods)
+            ;; No cargo ship can take anything - use the wharf if we have one
+            (when (rules/can-use-wharf? game-state player-idx)
+              (let [best-good (->> (:goods player)
+                                   (filter #(pos? (second %)))
+                                   (sort-by second)
+                                   last
+                                   first)]
+                [best-good :wharf]))))
 
         ;; For roles with no choices
         :execute))
@@ -378,21 +352,25 @@
     nil))
 
 (defn ai-select-move
-  "Main entry point for heuristic AI - returns a move in the expected format"
+  "Main entry point for heuristic AI - returns a move in the expected format.
+   Always returns a move during role execution (a pass move when there is no
+   legal choice) so the game keeps advancing."
   [game-state player-id & [difficulty]]
   (let [move (get-heuristic-move game-state player-id)]
-    (when move
-      (println (str "Heuristic AI Player " player-id " selected: " move
-                    " (difficulty: " (or difficulty :medium) ")"))
-      ;; Convert move to the format expected by the game engine
-      (case (:phase game-state)
-        :role-selection
-        {:type :select-role :role move :player-id player-id}
+    ;; Convert move to the format expected by the game engine
+    (case (:phase game-state)
+      :role-selection
+      (when move
+        {:type :select-role :role move :player-id player-id})
 
-        :role-execution
-        {:type :role-action
-         :role (:selected-role game-state)
-         :player-id player-id
-         :args (if (= move :execute) [] [move])}
+      :role-execution
+      {:type :role-action
+       :role (:selected-role game-state)
+       :player-id player-id
+       :args (cond
+               (nil? move) []
+               (= move :execute) []
+               (vector? move) move
+               :else [move])}
 
-        nil))))
+      nil)))

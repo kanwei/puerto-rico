@@ -1,135 +1,96 @@
 (ns puerto-rico.game.rules
   "Puerto Rico game rules implementation"
-  (:require [puerto-rico.game.state :as state]))
+  (:require [clojure.set :as set]
+            [puerto-rico.game.state :as state]))
 
 ;; Forward declarations
 (declare end-role-execution execute-role has-occupied-building?)
 
+;; Trade value of each good (also used to break ties when auto-choosing goods)
+(def good-values {:corn 0 :indigo 1 :sugar 2 :tobacco 3 :coffee 4})
+
 ;; Role execution functions
+
+(defn- add-colonist-from-supply-or-ship
+  "Take a colonist from the supply (or the ship if the supply is empty) and place
+   it on the tile at tile-path. Used by the hospice and university."
+  [game-state tile-path]
+  (cond
+    (pos? (:colonist-supply game-state))
+    (-> game-state
+        (update-in (conj tile-path :colonists) inc)
+        (update :colonist-supply dec))
+
+    (pos? (:colonist-ship game-state))
+    (-> game-state
+        (update-in (conj tile-path :colonists) inc)
+        (update :colonist-ship dec))
+
+    :else game-state))
+
+(defn- place-plantation
+  "Give the player a new tile, applying the hospice bonus if requested."
+  [game-state player-idx tile-type hospice-applies?]
+  (let [game-after (update-in game-state [:players player-idx :plantations]
+                              conj {:type tile-type :colonists 0})
+        new-idx (dec (count (get-in game-after [:players player-idx :plantations])))]
+    (if (and hospice-applies?
+             (has-occupied-building? (get-in game-after [:players player-idx]) :hospice))
+      (add-colonist-from-supply-or-ship game-after [:players player-idx :plantations new-idx])
+      game-after)))
+
+(defn island-full? [player]
+  (>= (count (:plantations player)) 12))
+
+(defn may-take-quarry?
+  "Only the settler (role selector) may take a quarry, or the owner of an
+   occupied construction hut."
+  [game-state player-idx]
+  (or (= player-idx (:role-selector-idx game-state))
+      (has-occupied-building? (get-in game-state [:players player-idx]) :construction-hut)))
 
 (defn execute-settler [game-state player-id plantation-choice]
   "Execute the settler role - player gets to take a plantation from face-up tiles or a quarry
    plantation-choice can be:
    - A plantation type from face-up tiles
-   - :quarry
+   - :quarry (role selector privilege, or occupied construction hut)
    - :random-from-deck (for hacienda bonus draw)"
-  (let [player-idx (->> (:players game-state)
-                        (map-indexed vector)
-                        (filter #(= (:id (second %)) player-id))
-                        first
-                        first)
-        player (get-in game-state [:players player-idx])
+  (let [player-idx (state/player-index game-state player-id)
+        player (when player-idx (get-in game-state [:players player-idx]))
         face-up-plantations (:face-up-plantations game-state)
         quarry-supply (:quarry-supply game-state)
         plantation-deck (:plantation-supply game-state)
-        ;; Check if player has occupied buildings
-        has-hospice (has-occupied-building? player :hospice)
-        has-hacienda (has-occupied-building? player :hacienda)
-        has-construction-hut (has-occupied-building? player :construction-hut)]
+        has-hacienda (when player (has-occupied-building? player :hacienda))]
     (cond
-      ;; Invalid parameters
-      (not (and plantation-choice player-idx
-                (>= player-idx 0)
-                (< player-idx (count (:players game-state)))))
+      ;; Invalid parameters or island already full (12 spaces)
+      (or (nil? plantation-choice) (nil? player-idx) (island-full? player))
       game-state
 
-      ;; Drawing random plantation from deck (hacienda bonus)
+      ;; Drawing random plantation from deck (hacienda bonus).
+      ;; Rulebook: the hospice does NOT grant a colonist for this extra tile.
       (= plantation-choice :random-from-deck)
       (if (and has-hacienda (seq plantation-deck))
-        (let [drawn-plantation (first plantation-deck)
-              ;; Add plantation to player
-              game-after-draw (-> game-state
-                                  (update-in [:players player-idx :plantations]
-                                             conj {:type drawn-plantation :colonists 0})
-                                  (update :plantation-supply rest)
-                                  (update :plantation-supply vec))
-              ;; Apply hospice bonus if applicable
-              final-game (if has-hospice
-                           (let [colonist-supply (:colonist-supply game-after-draw)
-                                 colonist-ship (:colonist-ship game-after-draw)
-                                 plantation-count (count (get-in game-after-draw [:players player-idx :plantations]))
-                                 new-plantation-idx (dec plantation-count)]
-                             (cond
-                               (pos? colonist-supply)
-                               (-> game-after-draw
-                                   (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
-                                   (update :colonist-supply dec))
-                               (pos? colonist-ship)
-                               (-> game-after-draw
-                                   (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
-                                   (update :colonist-ship dec))
-                               :else game-after-draw))
-                           game-after-draw)]
-          final-game)
+        (-> game-state
+            (place-plantation player-idx (first plantation-deck) false)
+            (update :plantation-supply (comp vec rest)))
         game-state)
 
-      ;; Choosing a quarry
+      ;; Choosing a quarry (settler privilege or construction hut)
       (= plantation-choice :quarry)
-      (if (pos? quarry-supply)
-        (let [;; Add quarry to player's plantations
-              game-after-quarry (-> game-state
-                                    (update-in [:players player-idx :plantations]
-                                               conj {:type :quarry :colonists 0})
-                                    (update :quarry-supply dec))
-              ;; Apply hospice bonus if applicable
-              final-game (if has-hospice
-                           (let [colonist-supply (:colonist-supply game-after-quarry)
-                                 colonist-ship (:colonist-ship game-after-quarry)
-                                 plantation-count (count (get-in game-after-quarry [:players player-idx :plantations]))
-                                 new-plantation-idx (dec plantation-count)]
-                             (cond
-                               ;; Take colonist from supply
-                               (pos? colonist-supply)
-                               (-> game-after-quarry
-                                   (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
-                                   (update :colonist-supply dec))
-                               ;; Take colonist from ship
-                               (pos? colonist-ship)
-                               (-> game-after-quarry
-                                   (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
-                                   (update :colonist-ship dec))
-                               ;; No colonists available
-                               :else game-after-quarry))
-                           game-after-quarry)]
-          final-game)
+      (if (and (pos? quarry-supply) (may-take-quarry? game-state player-idx))
+        (-> game-state
+            (place-plantation player-idx :quarry true)
+            (update :quarry-supply dec))
         game-state)
 
       ;; Choosing from face-up plantations
       (some #(= % plantation-choice) face-up-plantations)
-      (let [;; Remove the chosen plantation WITHOUT drawing replacement yet
-            idx (.indexOf face-up-plantations plantation-choice)
+      (let [idx (.indexOf face-up-plantations plantation-choice)
             updated-face-up (vec (concat (subvec face-up-plantations 0 idx)
-                                         (subvec face-up-plantations (inc idx))))
-            ;; Update player's plantations
-            updated-players (assoc-in (:players game-state)
-                                      [player-idx :plantations]
-                                      (conj (get-in (:players game-state) [player-idx :plantations])
-                                            {:type plantation-choice :colonists 0}))
-            ;; Basic game state after taking plantation (no replenishment yet)
-            game-after-plantation (assoc game-state
-                                         :face-up-plantations updated-face-up
-                                         :players updated-players)
-            ;; Apply hospice bonus if applicable
-            final-game (if has-hospice
-                         (let [colonist-supply (:colonist-supply game-after-plantation)
-                               colonist-ship (:colonist-ship game-after-plantation)
-                               plantation-count (count (get-in game-after-plantation [:players player-idx :plantations]))
-                               new-plantation-idx (dec plantation-count)]
-                           (cond
-                             ;; Take colonist from supply
-                             (pos? colonist-supply)
-                             (-> game-after-plantation
-                                 (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
-                                 (update :colonist-supply dec))
-                             ;; Take colonist from ship
-                             (pos? colonist-ship)
-                             (-> game-after-plantation
-                                 (update-in [:players player-idx :plantations new-plantation-idx :colonists] inc)
-                                 (update :colonist-ship dec))
-                             ;; No colonists available
-                             :else game-after-plantation))
-                         game-after-plantation)]
-        final-game)
+                                         (subvec face-up-plantations (inc idx))))]
+        (-> game-state
+            (assoc :face-up-plantations updated-face-up)
+            (place-plantation player-idx plantation-choice true)))
 
       ;; Invalid choice
       :else
@@ -264,12 +225,14 @@
                                    (update :colonist-supply dec))
                                game-state)
 
-        ;; Step 2: Distribute ALL colonists from ship to players (round-robin from governor)
+        ;; Step 2: Distribute ALL colonists from ship, one at a time,
+        ;; starting with the mayor (role selector) and going clockwise
         colonists-on-ship (:colonist-ship game-after-privilege)
+        distribution-start (or role-selector-idx (:governor-idx game-after-privilege) 0)
         game-after-ship (if (> colonists-on-ship 0)
                           (loop [game game-after-privilege
                                  remaining-colonists colonists-on-ship
-                                 current-player-idx (:governor-idx game-after-privilege)]
+                                 current-player-idx distribution-start]
                             (if (<= remaining-colonists 0)
                               (assoc game :colonist-ship 0)
                               (let [next-player-idx (mod (inc current-player-idx) num-players)]
@@ -279,7 +242,7 @@
                                  next-player-idx))))
                           game-after-privilege)
 
-;; Step 3: Smart-place colonists for ALL players
+        ;; Step 3: Smart-place colonists for ALL players
         game-after-placement (update game-after-ship :players
                                      (fn [players]
                                        (mapv smart-place-colonists players)))
@@ -294,7 +257,7 @@
                                                                  (:buildings player))))
                                                   (:players game-after-placement)))
 
-        ;; Mayor should place at least as many colonists as there are players
+        ;; Refill with one colonist per empty building circle, minimum = player count
         colonists-to-add (max num-players total-empty-building-circles)
         colonists-available (min colonists-to-add (:colonist-supply game-after-placement))
 
@@ -302,37 +265,62 @@
                        (update :colonist-ship + colonists-available)
                        (update :colonist-supply - colonists-available))]
 
-    (println "Mayor executed (single action for entire table):")
-    (println "  Role selector privilege colonist:" (if (and role-selector-idx (> (:colonist-supply game-state) 0)) "given" "none available"))
-    (println "  Colonists distributed from ship:" colonists-on-ship)
-    (println "  All players auto-placed colonists")
-    (println "  Empty building circles across all players:" total-empty-building-circles)
-    (println "  New colonists added to ship:" colonists-available)
-    final-game))
+    ;; Rulebook game-end trigger: the ship could not be fully refilled
+    (if (< colonists-available colonists-to-add)
+      (assoc final-game :colonist-ship-shortfall true)
+      final-game)))
 
-(defn can-build-building? [player building-key building-info]
-  "Check if player can afford to build a building"
-  (and (>= (:money player) (:cost building-info))
-       ;; Check if player already has this building type
-       (not (some #(= (:type %) building-key) (:buildings player)))
-       (< (count (:buildings player)) 12)))
+(defn building-cost
+  "Actual cost of a building for a player: base cost minus quarry discount
+   (1 per occupied quarry, capped by the building's column) minus the builder
+   privilege (1 for the role selector during the builder phase). Floor is 0."
+  [game-state player building-key]
+  (let [building-info (get state/buildings building-key)
+        occupied-quarries (count (filter #(and (= (:type %) :quarry)
+                                               (pos? (:colonists %)))
+                                         (:plantations player)))
+        quarry-discount (min occupied-quarries (:column building-info))
+        player-idx (state/player-index game-state (:id player))
+        privilege-discount (if (and (= (:selected-role game-state) :builder)
+                                    (some? (:role-selector-idx game-state))
+                                    (= player-idx (:role-selector-idx game-state)))
+                             1
+                             0)]
+    (max 0 (- (:cost building-info) quarry-discount privilege-discount))))
+
+(defn can-build-building?
+  "Check if the player may build this building: it exists in the supply, they
+   don't own one, they have city space (large buildings need 2), and they can
+   afford it after quarry/privilege discounts."
+  [game-state player building-key]
+  (let [building-info (get state/buildings building-key)]
+    (and building-info
+         (pos? (get-in game-state [:building-supply building-key] 0))
+         (not (some #(= (:type %) building-key) (:buildings player)))
+         (<= (+ (state/city-slots-used player)
+                (if (= (:type building-info) :large) 2 1))
+             12)
+         (>= (:money player) (building-cost game-state player building-key)))))
 
 (defn execute-builder [game-state player-id building-choice]
   "Execute the builder role - player builds a building"
-  (let [player-idx (->> (:players game-state)
-                        (map-indexed vector)
-                        (filter #(= (:id (second %)) player-id))
-                        first
-                        first)
-        player (get-in game-state [:players player-idx])
-        building-info (get state/buildings building-choice)]
+  (let [player-idx (state/player-index game-state player-id)
+        player (when player-idx (get-in game-state [:players player-idx]))]
     (if (and building-choice
-             building-info
-             (can-build-building? player building-choice building-info))
-      (-> game-state
-          ;; Add building as a map with colonist tracking
-          (update-in [:players player-idx :buildings] conj {:type building-choice :colonists 0})
-          (update-in [:players player-idx :money] - (:cost building-info)))
+             player
+             (can-build-building? game-state player building-choice))
+      (let [cost (building-cost game-state player building-choice)
+            game-after-build (-> game-state
+                                 ;; Add building as a map with colonist tracking
+                                 (update-in [:players player-idx :buildings] conj {:type building-choice :colonists 0})
+                                 (update-in [:players player-idx :money] - cost)
+                                 (update-in [:building-supply building-choice] dec))
+            new-building-idx (dec (count (get-in game-after-build [:players player-idx :buildings])))]
+        ;; University: owner gets a colonist on the newly built building
+        (if (has-occupied-building? player :university)
+          (add-colonist-from-supply-or-ship game-after-build
+                                            [:players player-idx :buildings new-building-idx])
+          game-after-build))
       game-state)))
 
 (defn execute-craftsman [game-state]
@@ -357,22 +345,26 @@
                                                                                      (let [building-info (get state/buildings (:type %))]
                                                                                        (= (:type building-info) :production))) (:buildings player))
 
-;; Corn is special - it produces without a building
+                                         ;; Corn is special - it produces without a building
                                          corn-plantations (filter #(= (:type %) :corn) occupied-plantations)
                                          corn-production (reduce + (map :colonists corn-plantations))
 
-                                         ;; Other goods need both plantation and production building
+                                         ;; Other goods: production = min(occupied matching plantations,
+                                         ;; total occupied circles across ALL buildings producing that good)
+                                         building-capacity (reduce (fn [acc building]
+                                                                     (let [good-type (get-in state/buildings [(:type building) :good])]
+                                                                       (if good-type
+                                                                         (update acc good-type (fnil + 0) (:colonists building))
+                                                                         acc)))
+                                                                   {} occupied-production-buildings)
                                          other-goods-production
-                                         (reduce (fn [acc building]
-                                                   (let [building-info (get state/buildings (:type building))
-                                                         good-type (:good building-info)
-                                                         matching-plantations (filter #(= (:type %) good-type) occupied-plantations)]
-                                                     (if (seq matching-plantations)
-                                                       ;; Can produce this good (have both plantation and building)
-                                                       (assoc acc good-type (min (count matching-plantations)
-                                                                                 (:colonists building)))
+                                         (reduce (fn [acc [good-type capacity]]
+                                                   (let [matching-plantations (count (filter #(= (:type %) good-type)
+                                                                                             occupied-plantations))]
+                                                     (if (pos? matching-plantations)
+                                                       (assoc acc good-type (min matching-plantations capacity))
                                                        acc)))
-                                                 {} occupied-production-buildings)
+                                                 {} building-capacity)
 
                                          ;; Combine all production
                                          total-production (assoc other-goods-production :corn corn-production)
@@ -388,13 +380,15 @@
                                                                         acc))
                                                                     {} total-production)
 
-;; Add role selector privilege: +1 of first good produced
+                                         ;; Role selector privilege: +1 of one produced kind (auto-choose the
+                                         ;; most valuable kind that still has supply left)
                                          privilege-production (if (and is-role-selector? (seq limited-production))
-                                                                (let [privilege-good (first (keys limited-production))
-                                                                      available-supply (get current-supply privilege-good 0)
-                                                                      current-production (get limited-production privilege-good 0)]
-                                                                  ;; Only add privilege if there's at least 1 more good available in supply
-                                                                  (if (>= available-supply (inc current-production))
+                                                                (let [privilege-good (->> (keys limited-production)
+                                                                                          (filter #(> (get current-supply % 0)
+                                                                                                      (get limited-production % 0)))
+                                                                                          (sort-by good-values >)
+                                                                                          first)]
+                                                                  (if privilege-good
                                                                     (update limited-production privilege-good inc)
                                                                     limited-production))
                                                                 limited-production)
@@ -426,10 +420,6 @@
                                                                   (update supply good-type - amount))
                                                                 current-supply privilege-production)]
 
-                                     (println "Player" (:name player) "produced:" privilege-production)
-                                     (when (> factory-bonus 0)
-                                       (println "  Factory bonus:" factory-bonus "doubloons for" goods-types-produced "kinds of goods"))
-
                                      ;; Return updated game state
                                      (-> current-game-state
                                          (assoc-in [:players player-idx] updated-player)
@@ -441,21 +431,20 @@
                                      (produce-goods-for-player current-game player-idx is-role-selector?)))
                                  game-state
                                  turn-order)]
-
-    (println "Craftsman executed (players produced in turn order)")
-    (println "Final goods supply:" (:goods-supply final-game-state))
     final-game-state))
-
-(defn can-trade-good? [game-state player good]
-  "Check if player can trade a specific good"
-  (and (pos? (get-in player [:goods good] 0))
-       (not (contains? (set (map :good (:trading-house game-state))) good))
-       (< (count (:trading-house game-state)) 4)))
 
 (defn has-occupied-building? [player building-type]
   "Check if player has an occupied building of the given type"
   (some #(and (= (:type %) building-type) (pos? (:colonists %)))
         (:buildings player)))
+
+(defn can-trade-good? [game-state player good]
+  "Check if player can trade a specific good. The trading house buys only
+   different kinds (exception: occupied office) and holds at most 4 goods."
+  (and (pos? (get-in player [:goods good] 0))
+       (< (count (:trading-house game-state)) 4)
+       (or (not (contains? (set (map :good (:trading-house game-state))) good))
+           (has-occupied-building? player :office))))
 
 (defn clear-full-trading-house [game-state]
   "Clear trading house if it contains 4 different goods, returning goods to supply"
@@ -472,37 +461,24 @@
       game-state)))
 
 (defn execute-trader [game-state player-id good-choice]
-  "Execute the trader role - sell goods to trading house"
-  (let [player-idx (->> (:players game-state)
-                        (map-indexed vector)
-                        (filter #(= (:id (second %)) player-id))
-                        first
-                        first)
-        player (get-in game-state [:players player-idx])
+  "Execute the trader role - sell goods to trading house.
+   The full trading house is emptied at the END of the trader phase, not here."
+  (let [player-idx (state/player-index game-state player-id)
+        player (when player-idx (get-in game-state [:players player-idx]))
         role-selector-idx (:role-selector-idx game-state)
         is-role-selector? (= player-idx role-selector-idx)
-        base-trade-value (case good-choice
-                           :corn 0
-                           :indigo 1
-                           :sugar 2
-                           :tobacco 3
-                           :coffee 4
-                           0)
-        ;; Check for market building bonuses
-        market-bonus (cond
-                       (has-occupied-building? player :large-market) 2
-                       (has-occupied-building? player :small-market) 1
-                       :else 0)
+        base-trade-value (get good-values good-choice 0)
+        ;; Market bonuses stack: small +1 and large +2 (both = +3)
+        market-bonus (+ (if (has-occupied-building? player :small-market) 1 0)
+                        (if (has-occupied-building? player :large-market) 2 0))
         ;; Role selector gets +1 privilege bonus
         privilege-bonus (if is-role-selector? 1 0)
         total-value (+ base-trade-value market-bonus privilege-bonus)]
-    (if (and good-choice (can-trade-good? game-state player good-choice))
-      (let [game-after-trade (-> game-state
-                                 (update-in [:players player-idx :goods good-choice] dec)
-                                 (update-in [:players player-idx :money] + total-value)
-                                 (update :trading-house conj {:good good-choice :player-id player-id}))]
-        ;; Check if trading house is now full and clear it if so
-        (clear-full-trading-house game-after-trade))
+    (if (and good-choice player (can-trade-good? game-state player good-choice))
+      (-> game-state
+          (update-in [:players player-idx :goods good-choice] dec)
+          (update-in [:players player-idx :money] + total-value)
+          (update :trading-house conj {:good good-choice :player-id player-id}))
       game-state)))
 
 (defn award-victory-points
@@ -517,45 +493,26 @@
      vps-to-award]))
 
 (defn find-ship-for-good [ships good amount]
-  "Find appropriate ship for shipping goods according to Puerto Rico rules:
-   1. If any ship already contains the same good type, you MUST use it (regardless of capacity)
-   2. Only if no partially filled ships contain this good type can you use an empty ship
-   3. You cannot choose between multiple valid ships - the rules determine which ship to use"
-  (let [;; Separate ships into partially filled and empty
-        partially-filled-ships (->> ships
-                                    (map-indexed vector)
-                                    (filter (fn [[idx ship]]
-                                              (and (:good ship) (pos? (:amount ship))))))
-        empty-ships (->> ships
-                         (map-indexed vector)
-                         (filter (fn [[idx ship]]
-                                   (nil? (:good ship)))))
-
-        ;; Check if any partially filled ship contains this good type
-        ;; NOTE: We don't check capacity here - you MUST use existing ship regardless
-        compatible-filled-ship (->> partially-filled-ships
-                                    (filter (fn [[idx ship]]
-                                              (= (:good ship) good)))
-                                    (first))
-
-        ;; Find the smallest empty ship that can hold the goods
-        compatible-empty-ship (->> empty-ships
-                                   (filter (fn [[idx ship]]
-                                             (>= (:capacity ship) amount)))
-                                   (sort-by (fn [[idx ship]] (:capacity ship)))
-                                   (first))]
-
-    ;; Puerto Rico rule: MUST use partially filled ship if available for this good type
-    (cond
-      ;; Rule 1: If there's a partially filled ship with the same good type, MUST use it
-      compatible-filled-ship compatible-filled-ship
-
-      ;; Rule 2: Only if no partially filled ship has this good type, can use empty ship
-      (and (nil? compatible-filled-ship) compatible-empty-ship)
-      compatible-empty-ship
-
-      ;; Rule 3: Cannot ship if no valid ship exists
-      :else nil)))
+  "Find the ship this good must be loaded on, per Puerto Rico rules:
+   1. If a ship already carries this good, it MUST be used. If that ship is
+      full, this good cannot be shipped at all (returns nil).
+   2. Otherwise an empty ship is used: the smallest that fits everything, or
+      if none fits everything, the one that loads the most (partial load).
+   Returns [idx ship] or nil."
+  (let [indexed (map-indexed vector ships)
+        same-good-ship (first (filter (fn [[_ ship]] (= (:good ship) good)) indexed))
+        empty-ships (filter (fn [[_ ship]] (nil? (:good ship))) indexed)]
+    (if same-good-ship
+      ;; Must use the ship already carrying this good - unless it's full
+      (let [[_ ship] same-good-ship]
+        (when (< (:amount ship) (:capacity ship))
+          same-good-ship))
+      ;; No ship carries this good - use an empty ship
+      (let [fits-all (filter (fn [[_ ship]] (>= (:capacity ship) amount)) empty-ships)]
+        (if (seq fits-all)
+          (first (sort-by (fn [[_ ship]] (:capacity ship)) fits-all))
+          ;; Nothing fits everything: must load as many as possible on the biggest
+          (last (sort-by (fn [[_ ship]] (:capacity ship)) empty-ships)))))))
 
 (defn return-full-ships-to-supply [game-state]
   "Check all ships and return goods from full ships to supply, then reset those ships"
@@ -581,6 +538,27 @@
             (and (pos? amount)
                  (find-ship-for-good ships good-type amount)))
           goods)))
+
+(defn can-use-wharf?
+  "Occupied wharf, not yet used this captain phase, and any goods to ship"
+  [game-state player-idx]
+  (let [player (get-in game-state [:players player-idx])]
+    (and (has-occupied-building? player :wharf)
+         (not (contains? (get game-state :wharf-used #{}) player-idx))
+         (some pos? (vals (:goods player))))))
+
+(defn captain-can-act?
+  "A player can act in the captain phase if they can load on a cargo ship or
+   use their wharf"
+  [game-state player-idx]
+  (or (boolean (can-ship-goods? game-state (get-in game-state [:players player-idx])))
+      (can-use-wharf? game-state player-idx)))
+
+(defn pass-captain-turn
+  "Record a captain-phase turn where the player did not load anything.
+   The phase ends after a full lap of consecutive non-loading turns."
+  [game-state]
+  (update game-state :captain-passes (fnil inc 0)))
 
 (defn can-trade-any-goods? [game-state player]
   "Check if player has any goods that can be traded"
@@ -608,46 +586,55 @@
                (some #(= (:type %) good-type) occupied-plantations)))
            occupied-production-buildings))))
 
-(defn execute-captain [game-state player-id good-choice]
-  "Execute the captain role - ship goods"
-  (let [player-idx (->> (:players game-state)
-                        (map-indexed vector)
-                        (filter #(= (:id (second %)) player-id))
-                        first
-                        first)
-        player (get-in game-state [:players player-idx])
-        amount-to-ship (get-in player [:goods good-choice] 0)
-        ship-choice (find-ship-for-good (:ships game-state) good-choice amount-to-ship)]
-    (if (and good-choice (pos? amount-to-ship) ship-choice)
-      (let [[ship-idx ship] ship-choice
-            actual-amount (min amount-to-ship (- (:capacity ship) (:amount ship)))
-            ;; Award base VPs using helper function that respects supply
-            [game-after-base-vps vps-awarded] (award-victory-points game-state player-idx actual-amount)
-            ;; Check for harbor bonus: +1 VP per loading action (not per barrel)
-            has-harbor (has-occupied-building? player :harbor)
-            harbor-bonus (if has-harbor 1 0)
-            ;; Award harbor bonus VP if applicable
-            [game-after-harbor harbor-vps-awarded] (if has-harbor
-                                                     (award-victory-points game-after-base-vps player-idx harbor-bonus)
-                                                     [game-after-base-vps 0])
-            ;; Check if this player is the Captain (role selector) and award bonus
-            is-captain (= player-idx (:role-selector-idx game-state))
-            captain-bonus (if (and is-captain
-                                   (not (get-in game-state [:captain-bonus-awarded] false)))
-                            1
-                            0)
-            [game-with-captain-bonus captain-vps-awarded] (if (pos? captain-bonus)
-                                                            (award-victory-points game-after-harbor player-idx captain-bonus)
-                                                            [game-after-harbor 0])
-            ;; Mark that captain bonus has been awarded if applicable
-            final-game (if (pos? captain-bonus)
-                         (assoc game-with-captain-bonus :captain-bonus-awarded true)
-                         game-with-captain-bonus)]
-        (-> final-game
-            (update-in [:players player-idx :goods good-choice] - actual-amount)
-            (assoc-in [:ships ship-idx :good] good-choice)
-            (update-in [:ships ship-idx :amount] + actual-amount)))
-      game-state)))
+(defn- award-loading-bonuses
+  "Award harbor (+1 VP per loading action) and captain privilege (+1 VP for the
+   role selector's first load this phase) after a successful load."
+  [game-state player-idx]
+  (let [player (get-in game-state [:players player-idx])
+        game-after-harbor (if (has-occupied-building? player :harbor)
+                            (first (award-victory-points game-state player-idx 1))
+                            game-state)
+        is-captain (= player-idx (:role-selector-idx game-state))]
+    (if (and is-captain (not (:captain-bonus-awarded game-state)))
+      (-> (first (award-victory-points game-after-harbor player-idx 1))
+          (assoc :captain-bonus-awarded true))
+      game-after-harbor)))
+
+(defn execute-captain
+  "Execute one captain-phase loading turn. With wharf? truthy, the player ships
+   ALL goods of the chosen kind to the supply via their wharf instead of a ship."
+  [game-state player-id good-choice & [wharf?]]
+  (let [player-idx (state/player-index game-state player-id)
+        player (when player-idx (get-in game-state [:players player-idx]))
+        amount-to-ship (get-in player [:goods good-choice] 0)]
+    (cond
+      (or (nil? good-choice) (nil? player) (zero? amount-to-ship))
+      game-state
+
+      ;; Wharf: ship all goods of one kind straight to the supply
+      wharf?
+      (if (can-use-wharf? game-state player-idx)
+        (-> (first (award-victory-points game-state player-idx amount-to-ship))
+            (award-loading-bonuses player-idx)
+            (update-in [:players player-idx :goods good-choice] - amount-to-ship)
+            (update-in [:goods-supply good-choice] + amount-to-ship)
+            (update :wharf-used (fnil conj #{}) player-idx)
+            (assoc :captain-passes 0))
+        game-state)
+
+      ;; Normal load onto a cargo ship
+      :else
+      (if-let [[ship-idx ship] (find-ship-for-good (:ships game-state) good-choice amount-to-ship)]
+        (let [actual-amount (min amount-to-ship (- (:capacity ship) (:amount ship)))]
+          (if (pos? actual-amount)
+            (-> (first (award-victory-points game-state player-idx actual-amount))
+                (award-loading-bonuses player-idx)
+                (update-in [:players player-idx :goods good-choice] - actual-amount)
+                (assoc-in [:ships ship-idx :good] good-choice)
+                (update-in [:ships ship-idx :amount] + actual-amount)
+                (assoc :captain-passes 0))
+            game-state))
+        game-state))))
 
 ;; Role selection and execution
 (defn select-role [game-state player-id role]
@@ -679,151 +666,145 @@
           (update :used-roles conj role)))
     game-state))
 
-(defn calculate-warehouse-storage [player]
-  "Calculate how many goods TYPES a player can store based on warehouses"
-  (let [has-small-warehouse (has-occupied-building? player :small-warehouse)
-        has-large-warehouse (has-occupied-building? player :large-warehouse)]
-    (cond
-      ;; Both warehouses: 1 base + 1 small + 2 large = 4 types total
-      (and has-small-warehouse has-large-warehouse) 4
-      ;; Large warehouse only: 1 base + 2 large = 3 types total  
-      has-large-warehouse 3
-      ;; Small warehouse only: 1 base + 1 small = 2 types total
-      has-small-warehouse 2
-      ;; No warehouses: 1 type total (but only 1 good of that type)
-      :else 1)))
+(defn warehouse-kinds-storable
+  "How many complete KINDS of goods a player may keep at the end of the captain
+   phase: small warehouse 1, large warehouse 2, both 3, none 0. Every player may
+   additionally keep exactly one single good on their windrose."
+  [player]
+  (+ (if (has-occupied-building? player :small-warehouse) 1 0)
+     (if (has-occupied-building? player :large-warehouse) 2 0)))
+
+(defn- store-player-goods
+  "Returns [player-with-kept-goods discarded-goods-map]"
+  [player]
+  (let [current-goods (:goods player)
+        goods-with-amounts (filter #(pos? (second %)) current-goods)
+        kinds-storable (warehouse-kinds-storable player)
+        ;; Auto-choice: keep the kinds with the most goods (ties: most valuable)
+        sorted-kinds (sort-by (fn [[good amount]] [amount (get good-values good 0)])
+                              #(compare %2 %1)
+                              goods-with-amounts)
+        kept-kinds (map first (take kinds-storable sorted-kinds))
+        remaining (drop kinds-storable sorted-kinds)
+        ;; Windrose: one single good of the most valuable remaining kind
+        windrose-kind (->> remaining (map first) (sort-by good-values >) first)
+        new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
+                         (select-keys current-goods kept-kinds)
+                         (when windrose-kind {windrose-kind 1}))
+        discarded (merge-with - current-goods new-goods)]
+    [(assoc player :goods new-goods) discarded]))
 
 (defn apply-storage-rules [game-state]
   "Apply storage rules at end of captain phase - players must discard excess goods"
-  (let [total-discarded (atom {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0})]
+  (let [results (map store-player-goods (:players game-state))
+        updated-players (mapv first results)
+        total-discarded (reduce #(merge-with + %1 %2) {} (map second results))]
     (-> game-state
-        (update :players
-                (fn [players]
-                  (mapv (fn [player]
-                          (let [current-goods (:goods player)
-                                goods-with-amounts (filter #(pos? (second %)) current-goods)
-                                goods-types-count (count goods-with-amounts)
-                                max-storable-types (calculate-warehouse-storage player)
-                                has-no-warehouses (and (not (has-occupied-building? player :small-warehouse))
-                                                       (not (has-occupied-building? player :large-warehouse)))]
-                            (cond
-                              ;; Player can store all their goods types
-                              (<= goods-types-count max-storable-types)
-                              (if (and has-no-warehouses (> goods-types-count 1))
-                                ;; Special case: no warehouses but multiple types - keep only 1 good total
-                                (let [goods-priority {:coffee 5 :tobacco 4 :sugar 3 :indigo 2 :corn 1}
-                                      best-good-type (first (sort-by #(get goods-priority % 0) >
-                                                                     (map first goods-with-amounts)))
-                                      new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
-                                                       {best-good-type 1})
-                                      discarded (merge-with - current-goods new-goods)]
-                                  ;; Track what was discarded
-                                  (swap! total-discarded #(merge-with + % discarded))
-                                  (assoc player :goods new-goods))
-                                ;; With warehouses or only one type: keep all goods of allowed types
-                                (if (and has-no-warehouses (= goods-types-count 1))
-                                  ;; No warehouses, one type: keep only 1 good of that type
-                                  (let [[good-type _] (first goods-with-amounts)
-                                        new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
-                                                         {good-type 1})
-                                        discarded (merge-with - current-goods new-goods)]
-                                    ;; Track what was discarded
-                                    (swap! total-discarded #(merge-with + % discarded))
-                                    (assoc player :goods new-goods))
-                                  ;; Has warehouses: keep all goods of the types
-                                  player))
+        (assoc :players updated-players)
+        (update :goods-supply #(merge-with + % total-discarded)))))
 
-                              ;; Player has too many types - must choose which types to keep  
-                              :else
-                              (let [goods-priority {:coffee 5 :tobacco 4 :sugar 3 :indigo 2 :corn 1}
-                                    sorted-goods (sort-by #(get goods-priority (first %) 0) > goods-with-amounts)
-                                    goods-to-keep (take max-storable-types sorted-goods)
-                                    ;; For no warehouses, keep only 1 good of the best type
-                                    final-goods (if has-no-warehouses
-                                                  (let [[best-type _] (first goods-to-keep)]
-                                                    {best-type 1})
-                                                  ;; With warehouses, keep all goods of the selected types
-                                                  (into {} goods-to-keep))
-                                    new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
-                                                     final-goods)
-                                    discarded (merge-with - current-goods new-goods)]
-                                ;; Track what was discarded
-                                (swap! total-discarded #(merge-with + % discarded))
-                                (assoc player :goods new-goods)))))
-                        players)))
-        ;; Return discarded goods to supply
-        (update :goods-supply #(merge-with + % @total-discarded)))))
+(defn- start-new-round [game-state]
+  (let [num-players (count (:players game-state))
+        game-roles (or (:roles game-state) state/roles)
+        unpicked-roles (set/difference (set game-roles) (:used-roles game-state))
+        new-governor (mod (inc (:governor-idx game-state)) num-players)]
+    (-> game-state
+        (update :round inc)
+        (assoc :available-roles (set game-roles))
+        (assoc :used-roles #{})
+        ;; Unpicked role placards accumulate 1 doubloon each
+        (update :role-gold (fn [role-gold]
+                             (reduce (fn [rg role] (update rg role (fnil inc 0)))
+                                     role-gold
+                                     unpicked-roles)))
+        ;; Governor passes clockwise; the new governor selects first
+        (assoc :governor-idx new-governor)
+        (assoc :current-player-idx new-governor)
+        (assoc :players-selected-this-round 0)
+        (assoc :phase :role-selection))))
+
+(defn- end-game [game-state]
+  (let [final-players (mapv (fn [player]
+                              (assoc player :final-score (state/calculate-victory-points player)))
+                            (:players game-state))
+        ;; Most VP wins; ties broken by doubloons + goods (1 good = 1 doubloon)
+        winner (last (sort-by (juxt :final-score state/tiebreaker-value) final-players))]
+    (-> game-state
+        (assoc :players final-players)
+        (assoc :game-over true)
+        (assoc :winner winner)
+        (assoc :phase :game-over))))
+
+(defn- finish-role-execution
+  "Perform the completed role's end-of-phase duties, then return to role
+   selection - or end the round (and possibly the game) if every player has
+   selected a role."
+  [game-state]
+  (let [completed-role (:selected-role game-state)
+        base-game (-> game-state
+                      (assoc :phase :role-selection)
+                      (assoc :selected-role nil)
+                      (assoc :role-selector-idx nil)
+                      (assoc :role-execution-order nil)
+                      (assoc :role-execution-current-idx nil)
+                      (assoc :current-player-idx (state/next-player-idx game-state)))
+        game-after-role (case completed-role
+                          ;; Settler: discard leftover face-up tiles, reveal new ones
+                          :settler (-> base-game
+                                       replenish-plantations
+                                       (dissoc :hacienda-used))
+                          ;; Trader: empty the trading house only if it is full
+                          :trader (clear-full-trading-house base-game)
+                          ;; Captain: storage rules, then unload full ships
+                          :captain (-> base-game
+                                       (apply-storage-rules)
+                                       (return-full-ships-to-supply)
+                                       (dissoc :captain-bonus-awarded :captain-passes :wharf-used))
+                          base-game)
+        players-selected (:players-selected-this-round game-after-role)
+        num-players (count (:players game-after-role))]
+    (if (>= players-selected num-players)
+      ;; Round complete - the game ends at the end of the round a trigger occurred in
+      (if (state/check-victory-conditions game-after-role)
+        (end-game game-after-role)
+        (start-new-round game-after-role))
+      ;; Round continues with next player selecting a role
+      game-after-role)))
+
+(defn- advance-captain
+  "The captain phase loops clockwise as long as at least one player can load.
+   Skips players who cannot act; ends the phase after a full lap of consecutive
+   non-loading turns."
+  [game-state]
+  (let [num-players (count (:players game-state))
+        current-idx (:role-execution-current-idx game-state)]
+    (loop [idx (mod (inc current-idx) num-players)
+           passes (get game-state :captain-passes 0)
+           steps 0]
+      (cond
+        (or (>= passes num-players) (> steps num-players))
+        (finish-role-execution game-state)
+
+        (captain-can-act? game-state idx)
+        (-> game-state
+            (assoc :role-execution-current-idx idx)
+            (assoc :captain-passes passes))
+
+        :else
+        (recur (mod (inc idx) num-players) (inc passes) (inc steps))))))
 
 (defn advance-role-execution [game-state]
-  "Move to the next player in role execution order, or end role if all players have executed"
-  (let [execution-order (:role-execution-order game-state)
-        current-idx (:role-execution-current-idx game-state)
-        current-position (.indexOf execution-order current-idx)
-        next-position (inc current-position)]
-    (if (>= next-position (count execution-order))
-      ;; All players have executed the role, back to role selection
-      (let [completed-role (:selected-role game-state)
-            game-after-role (let [base-game (-> game-state
-                                                (assoc :phase :role-selection)
-                                                (assoc :selected-role nil)
-                                                (assoc :role-selector-idx nil)
-                                                (assoc :role-execution-order nil)
-                                                (assoc :role-execution-current-idx nil)
-                                                (assoc :current-player-idx (state/next-player-idx game-state)))]
-                              (cond
-                                ;; If Settler role just finished, replenish plantations and clear hacienda flags
-                                (= completed-role :settler)
-                                (-> base-game
-                                    replenish-plantations
-                                    (dissoc :hacienda-used))
-                                ;; If Captain role just finished, apply storage rules and empty full ships
-                                (= completed-role :captain)
-                                (-> base-game
-                                    (apply-storage-rules)
-                                    (return-full-ships-to-supply)
-                                    (dissoc :captain-bonus-awarded))
-                                :else base-game))
-            players-selected (:players-selected-this-round game-after-role)
-            num-players (count (:players game-after-role))]
-        ;; Check if round should end (each player has selected a role)
-        (if (>= players-selected num-players)
-          ;; Round is complete - FIRST check for game end conditions before doing anything else
-          (if (state/check-victory-conditions game-after-role)
-            ;; Game ends - calculate final scores (keep same round number)
-            (let [final-players (mapv (fn [player]
-                                        (assoc player :final-score (state/calculate-victory-points player)))
-                                      (:players game-after-role))
-                  winner (apply max-key :final-score final-players)]
-              (-> game-after-role
-                  (assoc :players final-players)
-                  (assoc :game-over true)
-                  (assoc :winner winner)
-                  (assoc :phase :game-over)))
-            ;; Continue to new round only if game is not ending
-            (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))]
-              (-> game-after-role
-                  (update :round inc)
-                  (assoc :available-roles (set state/roles))
-                  (assoc :used-roles #{})
-                  ;; Add gold to unpicked roles BEFORE starting new round
-                  (update :role-gold (fn [role-gold]
-                                       (reduce (fn [rg role]
-                                                 (update rg role inc))
-                                               role-gold
-                                               unpicked-roles)))
-                  ;; Rotate governor to next player
-                  (assoc :governor-idx (mod (inc (:governor-idx game-after-role)) num-players))
-                  (assoc :current-player-idx (mod (inc (:governor-idx game-after-role)) num-players)) ;; Governor goes first
-                  (assoc :players-selected-this-round 0)
-                  (assoc :phase :role-selection)
-                  ;; Clear trading house
-
-;; Reset full ships and return goods to supply
-                  (return-full-ships-to-supply))))
-          ;; Round continues with next player
-          game-after-role))
-      ;; Move to next player in execution order
-      (assoc game-state :role-execution-current-idx (nth execution-order next-position)))))
+  "Move to the next player in role execution order, or end the role when all
+   players have acted. The captain phase instead loops until nobody can load."
+  (if (= (:selected-role game-state) :captain)
+    (advance-captain game-state)
+    (let [execution-order (:role-execution-order game-state)
+          current-idx (:role-execution-current-idx game-state)
+          current-position (.indexOf execution-order current-idx)
+          next-position (inc current-position)]
+      (if (>= next-position (count execution-order))
+        (finish-role-execution game-state)
+        (assoc game-state :role-execution-current-idx (nth execution-order next-position))))))
 
 (defn execute-role [game-state role player-id & args]
   "Execute the selected role with given arguments"
@@ -833,65 +814,21 @@
     :builder (execute-builder game-state player-id (first args))
     :craftsman (execute-craftsman game-state)
     :trader (execute-trader game-state player-id (first args))
-    :captain (execute-captain game-state player-id (first args))
-    :prospector (let [executor-idx (:role-execution-current-idx game-state)
-                      selector-idx (:role-selector-idx game-state)]
-                  ;; Only the role selector gets the 1 gold bonus
-                  (if (= executor-idx selector-idx)
-                    (update-in game-state [:players executor-idx :money] inc)
-                    game-state))
+    :captain (execute-captain game-state player-id (first args) (second args))
+    (:prospector :prospector-2)
+    (let [executor-idx (:role-execution-current-idx game-state)
+          selector-idx (:role-selector-idx game-state)]
+      ;; Only the role selector gets the 1 gold bonus
+      (if (= executor-idx selector-idx)
+        (update-in game-state [:players executor-idx :money] inc)
+        game-state))
     game-state))
 
 ;; Game phase management
 (defn end-role-execution [game-state]
-  "End the current role execution and return to role selection phase"
-  ;; Skip all player turns and end the role immediately
-  (let [game-after-role (-> game-state
-                            (assoc :phase :role-selection)
-                            (assoc :selected-role nil)
-                            (assoc :role-selector-idx nil)
-                            (assoc :role-execution-order nil)
-                            (assoc :role-execution-current-idx nil)
-                            (assoc :current-player-idx (state/next-player-idx game-state)))
-        players-selected (:players-selected-this-round game-after-role)
-        num-players (count (:players game-after-role))]
-    ;; Check if round should end (each player has selected a role)
-    (if (>= players-selected num-players)
-      ;; Round is complete - check for game end conditions FIRST
-      (if (state/check-victory-conditions game-after-role)
-        ;; Game ends - calculate final scores
-        (let [final-players (mapv (fn [player]
-                                    (assoc player :final-score (state/calculate-victory-points player)))
-                                  (:players game-after-role))
-              winner (apply max-key :final-score final-players)]
-          (-> game-after-role
-              (assoc :players final-players)
-              (assoc :game-over true)
-              (assoc :winner winner)
-              (assoc :phase :game-over)))
-        ;; Continue to new round only if game is not ending
-        (let [unpicked-roles (clojure.set/difference (set state/roles) (:used-roles game-after-role))]
-          (-> game-after-role
-              (update :round inc)
-              (assoc :available-roles (set state/roles))
-              (assoc :used-roles #{})
-              ;; Add gold to unpicked roles BEFORE starting new round
-              (update :role-gold (fn [role-gold]
-                                   (reduce (fn [rg role]
-                                             (update rg role inc))
-                                           role-gold
-                                           unpicked-roles)))
-              ;; Rotate governor to next player
-              (assoc :governor-idx (mod (inc (:governor-idx game-after-role)) num-players))
-              (assoc :current-player-idx (mod (inc (:governor-idx game-after-role)) num-players)) ;; Governor goes first
-              (assoc :players-selected-this-round 0)
-              (assoc :phase :role-selection)
-              ;; Reset full ships and return goods to supply
-              (return-full-ships-to-supply))))
-      ;; Round continues with next player
-      game-after-role)))
-
-; This function is no longer needed - round ending logic moved to advance-role-execution
+  "End the current role execution immediately (used for table-wide roles like
+   mayor and craftsman, which execute once for all players)"
+  (finish-role-execution game-state))
 
 ;; Game validation functions
 (defn valid-move? [game-state player-id move]
@@ -908,6 +845,21 @@
   "Apply a validated move to the game state"
   (case (:type move)
     :select-role (select-role game-state (:player-id move) (:role move))
-    :role-action (-> (apply execute-role game-state (:role move) (:player-id move) (:args move))
-                     (advance-role-execution))
+    :role-action
+    (let [role (:role move)
+          game-after (apply execute-role game-state role (:player-id move) (:args move))]
+      (case role
+        ;; Mayor and craftsman execute once for the whole table; prospector
+        ;; only affects the selector - end the role immediately
+        (:mayor :craftsman :prospector :prospector-2)
+        (end-role-execution game-after)
+
+        ;; Captain: a turn that loaded nothing counts as a pass so the
+        ;; looping phase always terminates
+        :captain
+        (advance-role-execution (if (identical? game-after game-state)
+                                  (pass-captain-turn game-after)
+                                  game-after))
+
+        (advance-role-execution game-after)))
     game-state))

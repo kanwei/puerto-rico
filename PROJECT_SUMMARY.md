@@ -2,7 +2,10 @@
 
 ## Project Overview
 
-This is a complete implementation of the Puerto Rico board game in Clojure/ClojureScript, featuring intelligent AI players using Monte Carlo Tree Search (MCTS). The project includes a full game engine, web-based UI, HTTP API server, and sophisticated AI opponents that can play strategically against human players.
+This is a complete implementation of the Puerto Rico board game in Clojure/ClojureScript, featuring heuristic AI players with distinct personalities. The project includes a full game engine, web-based UI, HTTP API server, and AI opponents that can play against human players.
+
+Note: a previous MCTS implementation was removed (it was dead code); a proper
+AlphaZero-style MCTS is planned as a future iteration on top of the current engine.
 
 ## Architecture
 
@@ -11,7 +14,7 @@ The project follows a modern full-stack Clojure architecture with clean separati
 - **Backend (Clojure)**: Game engine, HTTP server, and demo functionality
 - **Frontend (ClojureScript)**: React-based UI using Reagent
 - **Shared Code (CLJC)**: Game rules, state management, and AI logic that runs on both client and server
-- **AI System**: Monte Carlo Tree Search implementation for intelligent game play
+- **AI System**: Heuristic evaluation functions blended with personality weights (shipper/builder/random)
 
 ## Key File Structure
 
@@ -20,7 +23,8 @@ The project follows a modern full-stack Clojure architecture with clean separati
 - **`src/cljc/puerto_rico/game/rules.cljc`** - Complete game rules implementation including all 7 role executions (Settler, Mayor, Builder, Craftsman, Trader, Captain, Prospector), move validation, and game flow control
 
 ### AI System (Shared CLJC)
-- **`src/cljc/puerto_rico/ai/mcts.cljc`** - Fixed Monte Carlo Tree Search implementation with move generation, random playouts, game state evaluation, and configurable difficulty levels
+- **`src/cljc/puerto_rico/ai/heuristic.cljc`** - Heuristic evaluation of roles, plantations, buildings, trades, and shipping; main entry point `ai-select-move`
+- **`src/cljc/puerto_rico/ai/personalities.cljc`** - Personality weights (shipper/builder/random) blended with the heuristic scores in the frontend
 
 ### Backend Services (Clojure)
 - **`src/clj/puerto_rico/server.clj`** - HTTP API server with Ring/Compojure providing RESTful endpoints for game creation, moves, and AI turns
@@ -94,10 +98,10 @@ The project follows a modern full-stack Clojure architecture with clean separati
 (rules/apply-move game move)      ; Apply validated moves
 ```
 
-### AI API (mcts_fixed.cljc)
+### AI API (heuristic.cljc)
 ```clojure
-(ai/ai-select-move game player-id difficulty) ; Get AI move decision
-(ai/simple-mcts game player-id iterations)   ; Run MCTS algorithm
+(ai/ai-select-move game player-id)      ; Get AI move decision (heuristic)
+(ai/get-heuristic-move game player-id)  ; Raw choice (role/plantation/building/good)
 ```
 
 ## Development Workflow
@@ -139,8 +143,8 @@ clj -M:upgrade                    # Upgrade dependencies
 (demo/demo-human-vs-ai)
 
 ;; Test AI decisions
-(require '[puerto-rico.ai.mcts :as ai])
-(ai/ai-select-move game player-id :medium)
+(require '[puerto-rico.ai.heuristic :as ai])
+(ai/ai-select-move game player-id)
 ```
 
 ## Implementation Patterns and Conventions
@@ -159,10 +163,10 @@ clj -M:upgrade                    # Upgrade dependencies
 - **Namespace organization** - Clear separation between state, rules, AI, and presentation
 
 ### AI Architecture
-- **MCTS Implementation** - Uses Upper Confidence Bound (UCB1) for tree traversal
-- **Configurable difficulty** - Easy (5 iterations), Medium (10), Hard (20)
-- **Random playouts** - Evaluates positions through random game completion
-- **Strategic evaluation** - Considers victory points, resources, and building synergies
+- **Heuristic evaluation** - Scores roles, plantations, buildings, trades, and shipping options directly
+- **Personalities** - Shipper/builder/random weight profiles blended with the heuristic (frontend)
+- **Legal-move aware** - Uses the same legality checks as the engine (discounts, ship rules, quarry privilege)
+- **Driven by state watches** - AI turns trigger from game-state changes, never during React renders
 
 ### Frontend Patterns  
 - **Component-based** - Modular React components with Reagent
@@ -185,10 +189,10 @@ clj -M:upgrade                    # Upgrade dependencies
 - **Statistics tracking** - Player performance analytics over time
 
 ### AI Enhancements  
-- **Advanced MCTS** - Implement progressive widening, RAVE, or neural network evaluation
+- **AlphaZero-style MCTS** - Planned next iteration: decompose moves into micro-decisions,
+  add explicit pass moves, policy/value network with self-play training
 - **Opening book** - Pre-computed optimal early game moves
 - **Endgame solver** - Perfect play in simple endgame positions
-- **Multiple AI personalities** - Different strategic styles and risk preferences
 - **Learning system** - AI that adapts to human player tendencies
 
 ### Technical Improvements
@@ -216,17 +220,18 @@ clj -M:upgrade                    # Upgrade dependencies
 ## Current Status and Known Issues
 
 ### Working Features ✅
-- Complete Puerto Rico game engine with all 7 roles implemented
-- Intelligent MCTS AI players with strategic decision making
-- Beautiful web interface with interactive role selection
+- Complete Puerto Rico game engine, audited against the Rio Grande deluxe rulebook
+  (builder discounts, looping captain phase, wharf, office, university, warehouses,
+  role counts per player count, etc.)
+- Heuristic AI players with personalities (shipper/builder/random)
+- Web interface with interactive role selection; AI-vs-AI games run to completion
 - Human vs AI gameplay
 - HTTP API for game management
-- REPL-based development and testing tools
+- Rulebook-pinned test suite (`clj -M:test`), including full-game AI smoke tests
 
 ### Known Issues ⚠️
-- Plantation assignment display (game logic works but UI doesn't show assignments)
-- Some MCTS infinite loops in complex game scenarios
-- Craftsman role optimization needed for better performance
+- Mayor colonist placement is automated for all players (no manual placement or
+  rearrangement); the craftsman privilege auto-picks the most valuable good
 - Limited error messages in UI for invalid moves
 
 This project represents a sophisticated, complete implementation of Puerto Rico with modern architecture and intelligent AI opponents. The codebase is well-structured for both playing and extending the game with additional features.
