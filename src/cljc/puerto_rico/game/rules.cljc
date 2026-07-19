@@ -88,7 +88,7 @@
 
       ;; Choosing from face-up plantations
       (some #(= % plantation-choice) face-up-plantations)
-      (let [idx (.indexOf face-up-plantations plantation-choice)
+      (let [idx (.indexOf ^java.util.List face-up-plantations plantation-choice)
             updated-face-up (vec (concat (subvec face-up-plantations 0 idx)
                                          (subvec face-up-plantations (inc idx))))]
         (-> game-state
@@ -161,13 +161,13 @@
   [game-state player-idx]
   (update-in game-state [:players player-idx]
              (fn [player]
-               (let [total (+ (reduce + (map :colonists (:plantations player)))
-                              (reduce + (map :colonists (:buildings player)))
-                              (:san-juan-colonists player)
-                              (:colonists-in-hand player))]
+               (let [p-cols (reduce (fn [acc p] (+ acc (long (:colonists p 0)))) 0 (:plantations player))
+                     b-cols (reduce (fn [acc b] (+ acc (long (:colonists b 0)))) 0 (:buildings player))
+                     total (+ p-cols b-cols (:san-juan-colonists player) (:colonists-in-hand player))]
                  (-> player
-                     (update :plantations (fn [ps] (mapv #(assoc % :colonists 0) ps)))
-                     (update :buildings (fn [bs] (mapv #(assoc % :colonists 0) bs)))
+                     ;; mapv is still okay here since we NEED a new vector, but reduce is faster for counting
+                     (assoc :plantations (mapv #(assoc % :colonists 0) (:plantations player)))
+                     (assoc :buildings (mapv #(assoc % :colonists 0) (:buildings player)))
                      (assoc :san-juan-colonists 0)
                      (assoc :colonists-in-hand total))))))
 
@@ -274,10 +274,12 @@
    minimum the player count. A shortfall triggers the game-end condition."
   [game-state]
   (let [num-players (count (:players game-state))
-        empty-circles (reduce + (for [player (:players game-state)
-                                      building (:buildings player)]
-                                  (max 0 (- (get-tile-capacity building)
-                                            (:colonists building)))))
+        ;; Eliminated the slow 'for' comprehension
+        empty-circles (reduce (fn [acc player]
+                                (+ acc (reduce (fn [acc2 b]
+                                                 (+ acc2 (max 0 (- (get-tile-capacity b) (:colonists b 0)))))
+                                               0 (:buildings player))))
+                              0 (:players game-state))
         to-add (max num-players empty-circles)
         available (min to-add (:colonist-supply game-state))]
     (-> game-state
@@ -296,8 +298,9 @@
                    (assoc :colonists-in-hand 0)))))
 
 (defn empty-circle-count [player]
-  (+ (count (filter #(zero? (:colonists %)) (:plantations player)))
-     (reduce + (map get-empty-spaces (:buildings player)))))
+  (let [p-empty (reduce (fn [acc p] (if (zero? (:colonists p 0)) (inc acc) acc)) 0 (:plantations player))
+        b-empty (reduce (fn [acc b] (+ acc (get-empty-spaces b))) 0 (:buildings player))]
+    (+ p-empty b-empty)))
 
 (defn- fill-all-circles
   "Rulebook shortcut: all empty circles must be filled if possible, so when the
@@ -342,7 +345,13 @@
                   circles (empty-circle-count player)]
               (cond
                 (or (zero? hand) (zero? circles)) (recur (finish-mayor-turn gs idx) (inc pos))
-                (>= hand circles) (recur (fill-all-circles gs idx) (inc pos))
+                ;; hand covers every circle -> placement is forced (no decision).
+                ;; Record it so the UI can report the auto-fill instead of the
+                ;; player silently vanishing from the log.
+                (>= hand circles) (recur (-> (fill-all-circles gs idx)
+                                             (update :mayor-auto-fill-log (fnil conj [])
+                                                     {:player (:name player) :spaces circles}))
+                                         (inc pos))
                 :else (assoc gs :role-execution-current-idx idx)))
             ;; Human: keep the board, stop for an interactive turn if they have
             ;; colonists in hand (otherwise nothing to place - skip)
@@ -352,39 +361,53 @@
                 (recur (finish-mayor-turn gs idx) (inc pos))))))))))
 
 (defn building-cost
-  "Actual cost of a building for a player: base cost minus quarry discount
-   (1 per occupied quarry, capped by the building's column) minus the builder
-   privilege (1 for the role selector during the builder phase). Floor is 0."
+  "Actual cost of a building for a player. Zero allocations."
   [game-state player building-key]
   (let [building-info (get state/buildings building-key)
-        occupied-quarries (count (filter #(and (= (:type %) :quarry)
-                                               (pos? (:colonists %)))
-                                         (:plantations player)))
-        quarry-discount (min occupied-quarries (:column building-info))
-        ;; builder privilege: the role selector pays 1 less. Compare ids
-        ;; (O(1)) instead of scanning players for an index.
+
+        ;; Fast O(N) reduction over the vector array, zero lazy sequences
+        occupied-quarries (reduce (fn [acc p]
+                                    (if (and (= (:type p) :quarry) (pos? (:colonists p 0)))
+                                      (inc acc)
+                                      acc))
+                                  0 (:plantations player))
+
+        quarry-discount (min occupied-quarries (long (get building-info :column 0)))
         selector-idx (:role-selector-idx game-state)
+
         privilege-discount (if (and (= (:selected-role game-state) :builder)
                                     selector-idx
-                                    (= (:id player)
-                                       (:id (nth (:players game-state) selector-idx))))
-                             1
-                             0)]
-    (max 0 (- (:cost building-info) quarry-discount privilege-discount))))
+                                    (= (:id player) (:id (nth (:players game-state) selector-idx))))
+                             1 0)]
+    (max 0 (- (long (get building-info :cost 0)) quarry-discount privilege-discount))))
 
 (defn can-build-building?
-  "Check if the player may build this building: it exists in the supply, they
-   don't own one, they have city space (large buildings need 2), and they can
-   afford it after quarry/privilege discounts."
+  "Check if the player may build this building. Zero allocations, Fail-Fast."
   [game-state player building-key]
   (let [building-info (get state/buildings building-key)]
     (and building-info
-         (pos? (get-in game-state [:building-supply building-key] 0))
-         (not (some #(= (:type %) building-key) (:buildings player)))
-         (<= (+ (state/city-slots-used player)
-                (if (= (:type building-info) :large) 2 1))
-             12)
-         (>= (:money player) (building-cost game-state player building-key)))))
+         ;; 1. Fast supply lookup (get is much faster than get-in)
+         (pos? (get (:building-supply game-state) building-key 0))
+
+         ;; 2. Fast check if already owned.
+         ;; Returning `(reduced true)` instantly breaks the loop the moment we find it.
+         (not (reduce (fn [_ b] (if (= (:type b) building-key) (reduced true) false))
+                      false
+                      (:buildings player)))
+
+         ;; 3. Check affordability BEFORE city slots.
+         ;; (Money is the most common blocker. If they can't afford it, fail instantly
+         ;; without running the city-slots loop below!)
+         (>= (:money player) (building-cost game-state player building-key))
+
+         ;; 4. Fast inline city slots check.
+         ;; Avoids calling external functions and allocates zero memory.
+         (let [current-slots (reduce (fn [slots b]
+                                       (+ slots (if (= (:type (get state/buildings (:type b))) :large) 2 1)))
+                                     0
+                                     (:buildings player))
+               cost-slots (if (= (:type building-info) :large) 2 1)]
+           (<= (+ current-slots cost-slots) 12)))))
 
 (defn execute-builder [game-state player-id building-choice]
   "Execute the builder role - player builds a building"
@@ -418,86 +441,62 @@
         ;; Function to produce goods for a single player
         produce-goods-for-player (fn [current-game-state player-idx is-role-selector?]
                                    (let [player (get-in current-game-state [:players player-idx])
-                                         current-supply (:goods-supply current-game-state)
+                                         supply (:goods-supply current-game-state)
 
-                                         ;; Get occupied plantations (have at least 1 colonist)
-                                         occupied-plantations (filter #(and (:colonists %) (> (:colonists %) 0)) (:plantations player))
+                                         ;; 1. Fast pass over plantations
+                                         p-counts (reduce (fn [acc p]
+                                                            (if (pos? (:colonists p 0))
+                                                              (update acc (:type p) (fnil inc 0))
+                                                              acc))
+                                                          {} (:plantations player))
 
-                                         ;; Get occupied production buildings
-                                         occupied-production-buildings (filter #(and (:colonists %) (> (:colonists %) 0)
-                                                                                     ;; Check if building is a production type
-                                                                                     (let [building-info (get state/buildings (:type %))]
-                                                                                       (= (:type building-info) :production))) (:buildings player))
+                                         ;; 2. Fast pass over buildings for capacity
+                                         b-caps (reduce (fn [acc b]
+                                                          (if (pos? (:colonists b 0))
+                                                            (if-let [good-type (get-in state/buildings [(:type b) :good])]
+                                                              (update acc good-type (fnil + 0) (:colonists b 0))
+                                                              acc)
+                                                            acc))
+                                                        {} (:buildings player))
 
-                                         ;; Corn is special - it produces without a building
-                                         corn-plantations (filter #(= (:type %) :corn) occupied-plantations)
-                                         corn-production (reduce + (map :colonists corn-plantations))
+                                         ;; Calculate limits immediately
+                                         corn-prod (min (get p-counts :corn 0) (get supply :corn 0))
+                                         ind-prod  (min (get p-counts :indigo 0) (get b-caps :indigo 0) (get supply :indigo 0))
+                                         sug-prod  (min (get p-counts :sugar 0) (get b-caps :sugar 0) (get supply :sugar 0))
+                                         tob-prod  (min (get p-counts :tobacco 0) (get b-caps :tobacco 0) (get supply :tobacco 0))
+                                         cof-prod  (min (get p-counts :coffee 0) (get b-caps :coffee 0) (get supply :coffee 0))
 
-                                         ;; Other goods: production = min(occupied matching plantations,
-                                         ;; total occupied circles across ALL buildings producing that good)
-                                         building-capacity (reduce (fn [acc building]
-                                                                     (let [good-type (get-in state/buildings [(:type building) :good])]
-                                                                       (if good-type
-                                                                         (update acc good-type (fnil + 0) (:colonists building))
-                                                                         acc)))
-                                                                   {} occupied-production-buildings)
-                                         other-goods-production
-                                         (reduce (fn [acc [good-type capacity]]
-                                                   (let [matching-plantations (count (filter #(= (:type %) good-type)
-                                                                                             occupied-plantations))]
-                                                     (if (pos? matching-plantations)
-                                                       (assoc acc good-type (min matching-plantations capacity))
-                                                       acc)))
-                                                 {} building-capacity)
+                                         produced {:corn corn-prod, :indigo ind-prod, :sugar sug-prod, :tobacco tob-prod, :coffee cof-prod}
+                                         kinds-produced (reduce (fn [acc v] (if (pos? v) (inc acc) acc)) 0 (vals produced))
 
-                                         ;; Combine all production
-                                         total-production (assoc other-goods-production :corn corn-production)
-
-                                         ;; Limit production by current goods supply availability
-                                         limited-production (reduce (fn [acc [good-type amount]]
-                                                                      (if (> amount 0)
-                                                                        (let [available-supply (get current-supply good-type 0)
-                                                                              actual-amount (min amount available-supply)]
-                                                                          (if (> actual-amount 0)
-                                                                            (assoc acc good-type actual-amount)
-                                                                            acc))
-                                                                        acc))
-                                                                    {} total-production)
-
-                                         ;; Calculate factory bonus if player has occupied factory
-                                         has-factory (has-occupied-building? player :factory)
-                                         goods-types-produced (count (filter #(> (second %) 0) limited-production))
-                                         factory-bonus (if (and has-factory (> goods-types-produced 1))
-                                                         (case goods-types-produced
-                                                           2 1 ; 2 kinds = 1 doubloon
-                                                           3 2 ; 3 kinds = 2 doubloons
-                                                           4 3 ; 4 kinds = 3 doubloons
-                                                           5 5 ; 5 kinds = 5 doubloons
-                                                           0) ; 1 or 0 kinds = no bonus
+                                         factory-bonus (if (and (> kinds-produced 1)
+                                                                (some #(and (= (:type %) :factory) (pos? (:colonists % 0)))
+                                                                      (:buildings player)))
+                                                         (case kinds-produced 2 1, 3 2, 4 3, 5 5, 0)
                                                          0)
 
-                                         ;; Update player's goods
-                                         updated-goods (reduce (fn [goods [good-type amount]]
-                                                                 (update goods good-type + amount))
-                                                               (:goods player) limited-production)
-
-                                         ;; Update player with new goods and factory bonus
                                          updated-player (-> player
-                                                            (assoc :goods updated-goods)
+                                                            (update-in [:goods :corn] + corn-prod)
+                                                            (update-in [:goods :indigo] + ind-prod)
+                                                            (update-in [:goods :sugar] + sug-prod)
+                                                            (update-in [:goods :tobacco] + tob-prod)
+                                                            (update-in [:goods :coffee] + cof-prod)
                                                             (update :money + factory-bonus))
 
-                                         ;; Update goods supply by removing produced goods
-                                         updated-supply (reduce (fn [supply [good-type amount]]
-                                                                  (update supply good-type - amount))
-                                                                current-supply limited-production)]
+                                         updated-supply (-> supply
+                                                            (update :corn - corn-prod)
+                                                            (update :indigo - ind-prod)
+                                                            (update :sugar - sug-prod)
+                                                            (update :tobacco - tob-prod)
+                                                            (update :coffee - cof-prod))
 
-                                     ;; Return updated game state, remembering what the
-                                     ;; selector produced (their privilege choices)
-                                     (cond-> (-> current-game-state
-                                                 (assoc-in [:players player-idx] updated-player)
-                                                 (assoc :goods-supply updated-supply))
-                                       is-role-selector?
-                                       (assoc :craftsman-produced (set (keys limited-production))))))
+                                         next-state (-> current-game-state
+                                                        (assoc-in [:players player-idx] updated-player)
+                                                        (assoc :goods-supply updated-supply))]
+                                     (if is-role-selector?
+                                       (assoc next-state :craftsman-produced
+                                              (set (keep (fn [[k v]] (when (pos? v) k)) produced)))
+                                       next-state)))
 
         ;; Process each player in turn order
         final-game-state (reduce (fn [current-game player-idx]
@@ -543,10 +542,14 @@
 (defn can-trade-good? [game-state player good]
   "Check if player can trade a specific good. The trading house buys only
    different kinds (exception: occupied office) and holds at most 4 goods."
-  (and (pos? (get-in player [:goods good] 0))
-       (< (count (:trading-house game-state)) 4)
-       (or (not (contains? (set (map :good (:trading-house game-state))) good))
-           (has-occupied-building? player :office))))
+  (let [th (:trading-house game-state)]
+    (and (pos? (get-in player [:goods good] 0))
+         (< (count th) 4)
+         (or (has-occupied-building? player :office)
+             (not (or (= good (:good (nth th 0 nil)))
+                      (= good (:good (nth th 1 nil)))
+                      (= good (:good (nth th 2 nil)))
+                      (= good (:good (nth th 3 nil)))))))))
 
 (defn clear-full-trading-house [game-state]
   "Empty the trading house at the end of the trader phase if it is FULL.
@@ -604,20 +607,37 @@
    2. Otherwise an empty ship is used: the smallest that fits everything, or
       if none fits everything, the one that loads the most (partial load).
    Returns [idx ship] or nil."
-  (let [indexed (map-indexed vector ships)
-        same-good-ship (first (filter (fn [[_ ship]] (= (:good ship) good)) indexed))
-        empty-ships (filter (fn [[_ ship]] (nil? (:good ship))) indexed)]
-    (if same-good-ship
-      ;; Must use the ship already carrying this good - unless it's full
-      (let [[_ ship] same-good-ship]
-        (when (< (:amount ship) (:capacity ship))
-          same-good-ship))
-      ;; No ship carries this good - use an empty ship
-      (let [fits-all (filter (fn [[_ ship]] (>= (:capacity ship) amount)) empty-ships)]
-        (if (seq fits-all)
-          (first (sort-by (fn [[_ ship]] (:capacity ship)) fits-all))
-          ;; Nothing fits everything: must load as many as possible on the biggest
-          (last (sort-by (fn [[_ ship]] (:capacity ship)) empty-ships)))))))
+  (loop [i 0
+         best-empty-idx nil
+         best-empty-cap 1000
+         best-partial-idx nil
+         best-partial-cap -1]
+    (if (< i (count ships))
+      (let [ship (nth ships i)
+            s-good (:good ship)
+            s-cap (:capacity ship)]
+        (if (= s-good good)
+          ;; Rule 1: must use same-good ship. If full, return nil immediately.
+          (if (< (:amount ship) s-cap)
+            [i ship]
+            nil)
+          (if (nil? s-good)
+            ;; Track empty ships
+            (let [fits-all (>= s-cap amount)
+                  new-empty (if (and fits-all (< s-cap best-empty-cap))
+                              [i s-cap]
+                              [best-empty-idx best-empty-cap])
+                  new-partial (if (> s-cap best-partial-cap)
+                                [i s-cap]
+                                [best-partial-idx best-partial-cap])]
+              (recur (inc i) (first new-empty) (second new-empty)
+                     (first new-partial) (second new-partial)))
+            (recur (inc i) best-empty-idx best-empty-cap best-partial-idx best-partial-cap))))
+      ;; Loop finished, no exact match found
+      (cond
+        best-empty-idx [best-empty-idx (nth ships best-empty-idx)]
+        best-partial-idx [best-partial-idx (nth ships best-partial-idx)]
+        :else nil))))
 
 (defn return-full-ships-to-supply [game-state]
   "Check all ships and return goods from full ships to supply, then reset those ships"
@@ -996,7 +1016,7 @@
       game-state
       (-> game-state
           (finish-mayor-turn current-idx)
-          (mayor-next-turn (inc (.indexOf execution-order current-idx)))))))
+          (mayor-next-turn (inc (.indexOf ^java.util.List execution-order current-idx)))))))
 
 (defn advance-role-execution [game-state]
   "Move to the next player in role execution order, or end the role when all
@@ -1008,7 +1028,7 @@
     :mayor (advance-mayor game-state)
     (let [execution-order (:role-execution-order game-state)
           current-idx (:role-execution-current-idx game-state)
-          current-position (.indexOf execution-order current-idx)
+          current-position (.indexOf ^java.util.List execution-order current-idx)
           next-position (inc current-position)]
       (if (>= next-position (count execution-order))
         (finish-role-execution game-state)

@@ -60,6 +60,8 @@ def run_capture(cmd):
 
 def self_play(gen, champion, games, sims, players):
     out = os.path.join(DATA, f"gen{gen}.jsonl")
+    if gen == 1:
+        games = games // 10
     if os.path.exists(out):
         os.remove(out)
     cmd = ["clj", "-M:selfplay", "generate",
@@ -118,8 +120,8 @@ def evaluate(challenger, champion, games, sims, players):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--generations", type=int, default=8)
-    ap.add_argument("--games", type=int, default=100, help="self-play games per gen")
+    ap.add_argument("--generations", type=int, default=10)
+    ap.add_argument("--games", type=int, default=1000, help="self-play games per gen")
     ap.add_argument("--eval-games", type=int, default=30, help="head-to-head games")
     ap.add_argument("--sims", type=int, default=200)
     ap.add_argument("--eval-sims", type=int, default=100)

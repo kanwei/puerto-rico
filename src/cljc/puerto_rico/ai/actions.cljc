@@ -156,14 +156,27 @@
 
         :mayor
         ;; Placement turns: place from hand until it's empty or nothing is
-        ;; placeable; only then is "done" legal
-        (let [{:keys [plantations buildings]} (rules/placement-destinations player)
-              places (when (pos? (:colonists-in-hand player))
-                       (into (into [] (comp (filter plantations) (map place-plantation->id))
-                                   plantation-order)
-                             (comp (filter buildings) (map place-building->id))
-                             building-order))]
-          (if (seq places) places [pass-id]))
+        ;; placeable; only then is "done" legal. This is the hottest branch of
+        ;; the whole search (mayor placement is one atomic action per colonist),
+        ;; so walk the player's own tiles ONCE into a transient set of distinct
+        ;; destination-type ids, instead of allocating the two type-sets that
+        ;; placement-destinations builds and then re-scanning the 6+23 canonical
+        ;; order vectors. Result order is irrelevant to callers.
+        (if (pos? (long (:colonists-in-hand player)))
+          (let [ids (as-> (transient #{}) acc
+                      (reduce (fn [a t]
+                                (if (zero? (long (:colonists t 0)))
+                                  (conj! a (place-plantation->id (:type t)))
+                                  a))
+                              acc (:plantations player))
+                      (reduce (fn [a b]
+                                (if (pos? (rules/get-empty-spaces b))
+                                  (conj! a (place-building->id (:type b)))
+                                  a))
+                              acc (:buildings player))
+                      (persistent! acc))]
+            (if (seq ids) (vec ids) [pass-id]))
+          [pass-id])
 
         :craftsman
         ;; After production the selector may face a privilege choice

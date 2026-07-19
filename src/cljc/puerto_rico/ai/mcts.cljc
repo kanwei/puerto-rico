@@ -224,31 +224,18 @@
             id
             (recur more acc)))))))
 
-(defn- q-value
-  "Mean value of an action for the given mover from the search root, or nil if
-   the action was never visited. This is the search's estimate for that branch."
-  [root id mover]
-  (let [n (get-in root [:N id] 0)]
-    (when (pos? n)
-      (/ (nth (get-in root [:W id]) mover) n))))
-
 (defn search-stats
-  "Compact, transport-friendly diagnostics for a finished search, from the
-   acting player's perspective. :value is the value estimate for the branch the
-   AI actually plays (chosen-id); :candidates lists the most-visited actions,
-   each with its policy :weight (visit share) and branch :q value."
-  [game-state {:keys [root visits]} chosen-id & [n-top]]
-  (let [mover  (actions/actor-index game-state)
-        total  (reduce + 0 (vals visits))
-        ranked (->> visits (filter (comp pos? val)) (sort-by val >))
-        candidates (mapv (fn [[id n]]
-                           {:move   (actions/action->move game-state id)
-                            :weight (if (pos? total) (/ (double n) total) 0.0)
-                            :q      (q-value root id mover)})
-                         (take (or n-top 4) ranked))]
-    {:sims       total
-     :value      (q-value root chosen-id mover)
-     :candidates candidates}))
+  "Compact, transport-friendly diagnostics for a finished search: the
+   most-visited actions with their policy :weight (visit share). Cheap - derived
+   entirely from visit counts the search already produced, with no extra
+   evaluation."
+  [game-state {:keys [visits]} & [n-top]]
+  (let [total  (reduce + 0 (vals visits))
+        ranked (->> visits (filter (comp pos? val)) (sort-by val >))]
+    {:candidates (mapv (fn [[id n]]
+                         {:move   (actions/action->move game-state id)
+                          :weight (if (pos? total) (/ (double n) total) 0.0)})
+                       (take (or n-top 4) ranked))}))
 
 (defn ai-select-move
   "Drop-in AI interface: pick a move via MCTS and return it in the engine's
@@ -278,4 +265,4 @@
         (let [result (mcts-search game-state opts)
               id     (sample-action (:visits result) (:temperature opts))]
           {:move  (actions/action->move game-state id)
-           :stats (search-stats game-state result id)})))))
+           :stats (search-stats game-state result)})))))

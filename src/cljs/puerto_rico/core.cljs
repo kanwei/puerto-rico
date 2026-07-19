@@ -157,11 +157,11 @@
         (when-not (:is-ai current-player-data)
           (let [gold-on-role (get-in current-game [:role-gold role] 0)
                 role-msg (if (> gold-on-role 0)
-                           (str "🎭 Selected " (role-display-name role) " role (+" gold-on-role " gold)")
-                           (str "🎭 Selected " (role-display-name role) " role"))]
+                           (str "Selected " (role-display-name role) " role (+" gold-on-role " gold)")
+                           (str "Selected " (role-display-name role) " role"))]
             (add-log-entry role-msg (:name current-player-data))
             (when (contains? #{:prospector :prospector-2} role)
-              (add-log-entry (str "💰 Gained 1 doubloon from Prospector") (:name current-player-data)))))
+              (add-log-entry (str "Gained 1 doubloon from Prospector") (:name current-player-data)))))
         (swap! game-state assoc :game-state new-game-state)
 
         ;; Auto-execute roles that don't require player choices
@@ -185,7 +185,7 @@
                                  (rules/advance-role-execution game-after))]
             ;; Only log for human players (AI logs with score)
             (when-not (:is-ai executor-player)
-              (add-log-entry (str "🌱 Took " (name plantation-type) " plantation") (:name executor-player)))
+              (add-log-entry (str "Took " (name plantation-type) " plantation") (:name executor-player)))
             (swap! game-state assoc :game-state new-game-state)
             (js/console.log "Plantation chosen:" plantation-type "for player:" (:name executor-player) "New game state:" new-game-state)))))))
 
@@ -208,7 +208,7 @@
               (let [cost-msg (if (> discount 0)
                                (str " for $" actual-cost " (was $" base-cost ", -" discount " discount)")
                                (str " for $" actual-cost))]
-                (add-log-entry (str "🏗️ Built " (name building-key) cost-msg) (:name executor-player))))
+                (add-log-entry (str "Built " (name building-key) cost-msg) (:name executor-player))))
             (swap! game-state assoc :game-state new-game-state)
             (js/console.log "Building chosen:" building-key "for player:" (:name executor-player) "New game state:" new-game-state)))))))
 
@@ -247,9 +247,9 @@
             ;; Only log for human players (AI logs with details)
             (when-not (:is-ai executor-player)
               (let [action-text (case role
-                                  :trader (str "💰 Sold " (name good-type)
+                                  :trader (str "Sold " (name good-type)
                                                " for " money-gained " doubloons")
-                                  :captain (str "🚢 Shipped " goods-shipped " " (name good-type)
+                                  :captain (str "Shipped " goods-shipped " " (name good-type)
                                                 " for " vp-gained " VP")
                                   (str "Used " (name good-type)))]
                 (add-log-entry action-text (:name executor-player))))
@@ -275,7 +275,7 @@
                                   game-after-role))
                 vp-after (:victory-points (nth (:players new-game-state) executor-idx))]
             (when-not (:is-ai executor-player)
-              (add-log-entry (str "⚓ Wharf-shipped " amount " " (name good-type)
+              (add-log-entry (str "Wharf-shipped " amount " " (name good-type)
                                   " for " (- vp-after vp-before) " VP")
                              (:name executor-player)))
             (swap! game-state assoc :game-state new-game-state)))))))
@@ -293,11 +293,11 @@
             ;; Only log for human players (AI already logs its skip)
             (when-not (:is-ai executor-player)
               (let [action-text (case role
-                                  :trader "💼 Skipped trading (no goods)"
-                                  :captain "⛵ Skipped shipping (no goods)"
-                                  :builder "🔨 Skipped building (can't afford)"
-                                  :settler "🚫 Skipped settler (no plantations)"
-                                  "⏭️ Skipped")]
+                                  :trader "Skipped trading (no goods)"
+                                  :captain "Skipped shipping (no goods)"
+                                  :builder "Skipped building (can't afford)"
+                                  :settler "Skipped settler (no plantations)"
+                                  "Skipped")]
                 (add-log-entry action-text (:name executor-player))))
             (swap! game-state assoc :game-state new-game-state)
             (js/console.log "Player skipped role:" role "for player:" (:name executor-player))))))))
@@ -329,7 +329,7 @@
   (let [current-game (:game-state @game-state)
         selector (nth (:players current-game) (:role-selector-idx current-game))]
     (when-not (:is-ai selector)
-      (add-log-entry (str "⚒️ Craftsman privilege: took an extra " (name good)) (:name selector)))
+      (add-log-entry (str "Craftsman privilege: took an extra " (name good)) (:name selector)))
     (swap! game-state assoc :game-state
            (rules/apply-move current-game
                              {:type :role-action :role :craftsman
@@ -357,7 +357,7 @@
 (defn handle-mayor-done []
   (let [executor (current-role-executor (:game-state @game-state))]
     (when (and executor (not (:is-ai executor)))
-      (add-log-entry "👷 Done placing colonists" (:name executor)))
+      (add-log-entry "Done placing colonists" (:name executor)))
     (mayor-move! [])))
 
 (defn handle-mayor-auto-place
@@ -376,7 +376,7 @@
                               (inc n))
                        gs))]
         (when-not (:is-ai executor)
-          (add-log-entry "👷 Auto-placed colonists" (:name executor)))
+          (add-log-entry "Auto-placed colonists" (:name executor)))
         (swap! game-state assoc :game-state
                (rules/apply-move placed {:type :role-action :role :mayor
                                          :player-id pid :args []}))))))
@@ -390,7 +390,7 @@
         executor (current-role-executor current-game)]
     (when executor
       (when-not (:is-ai executor)
-        (add-log-entry (str "📦 Kept " (if (= op :store-kind) "all " "one ") (name good))
+        (add-log-entry (str "Kept " (if (= op :store-kind) "all " "one ") (name good))
                        (:name executor)))
       (swap! game-state assoc :game-state
              (rules/apply-move current-game
@@ -403,7 +403,7 @@
         executor (current-role-executor current-game)]
     (when executor
       (when-not (:is-ai executor)
-        (add-log-entry "📦 Done storing (rest discarded)" (:name executor)))
+        (add-log-entry "Done storing (rest discarded)" (:name executor)))
       (swap! game-state assoc :game-state
              (rules/apply-move current-game
                                {:type :role-action :role :captain
@@ -422,38 +422,38 @@
     (case (:type move)
       :select-role
       (let [gold (get-in game-data [:role-gold (:role move)] 0)]
-        (str "🎭 Selected " (role-display-name (:role move)) " role"
+        (str "Selected " (role-display-name (:role move)) " role"
              (when (pos? gold) (str " (+" gold " gold)"))))
 
       :role-action
       (case (:role move)
         :settler (cond
-                   (empty? args) "🚫 Skipped settler"
-                   (= (first args) :random-from-deck) "🏛️ Used Hacienda (drew a tile)"
-                   :else (str "🌱 Took " (name (first args))))
+                   (empty? args) "Skipped settler"
+                   (= (first args) :random-from-deck) "Used Hacienda (drew a tile)"
+                   :else (str "Took " (name (first args))))
         :builder (if (empty? args)
-                   "🔨 Skipped building"
-                   (str "🏗️ Built " (pretty (first args))))
+                   "Skipped building"
+                   (str "Built " (pretty (first args))))
         :trader (if (empty? args)
-                  "💼 Skipped trading"
-                  (str "💰 Sold " (name (first args))))
+                  "Skipped trading"
+                  (str "Sold " (name (first args))))
         :mayor (if (empty? args)
-                 "👷 Done placing colonists"
-                 (str "👷 Placed colonist on " (pretty (nth args 2))))
+                 "Done placing colonists"
+                 (str "Placed colonist on " (pretty (nth args 2))))
         :captain (cond
-                   (= (first args) :store-kind) (str "📦 Kept all " (name (second args)))
-                   (= (first args) :store-single) (str "📦 Kept one " (name (second args)))
+                   (= (first args) :store-kind) (str "Kept all " (name (second args)))
+                   (= (first args) :store-single) (str "Kept one " (name (second args)))
                    (empty? args) (if (:storage-phase game-data)
-                                   "📦 Done storing"
-                                   "⛵ Passed shipping")
-                   (= (second args) :wharf) (str "⚓ Wharf-shipped all " (name (first args)))
-                   :else (str "🚢 Shipped " (name (first args))))
+                                   "Done storing"
+                                   "Passed shipping")
+                   (= (second args) :wharf) (str "Wharf-shipped all " (name (first args)))
+                   :else (str "Shipped " (name (first args))))
         :craftsman (if (= (first args) :privilege)
-                     (str "⚒️ Craftsman privilege: extra " (name (second args)))
-                     "⚒️ Produced goods (all players)")
-        (:prospector :prospector-2) "💰 Prospector: +1 doubloon"
-        "⏭️ Acted")
-      "⏭️ Acted")))
+                     (str "Craftsman privilege: extra " (name (second args)))
+                     "Produced goods (all players)")
+        (:prospector :prospector-2) "Prospector: +1 doubloon"
+        "Acted")
+      "Acted")))
 
 (defn- heuristic-fallback-move [game-data]
   (let [actor (if (= (:phase game-data) :role-execution)
@@ -556,6 +556,21 @@
            (fn [_ _ old-val new-val]
              (when (not= (:game-state old-val) (:game-state new-val))
                (js/setTimeout check-ai-turn! 50))))
+
+;; Report mayor turns that the engine auto-resolved (hand covered every circle,
+;; so placement was forced and made no decision). The engine appends these to a
+;; monotonic :mayor-auto-fill-log; we log each new entry so a player - typically
+;; the mayor selector, who gets the privilege colonist - never silently vanishes
+;; from the log during the mayor phase.
+(add-watch game-state :mayor-autofill-logger
+           (fn [_ _ old-val new-val]
+             (let [old-log (get-in old-val [:game-state :mayor-auto-fill-log] [])
+                   new-log (get-in new-val [:game-state :mayor-auto-fill-log] [])]
+               (when (> (count new-log) (count old-log))
+                 (doseq [{:keys [player spaces]} (subvec new-log (count old-log))]
+                   (add-log-entry (str "Filled all " spaces (if (= spaces 1) " space" " spaces")
+                                       " automatically")
+                                  player))))))
 
 ;; --------------------------------------------------------------------------
 ;; Visual helpers
@@ -988,19 +1003,14 @@
            ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count amount]])]])]))
 
 (defn- fmt-pct [x] (str (js/Math.round (* 100 x)) "%"))
-(defn- fmt-val [x] (when (number? x) (.toFixed x 2)))
 
 (defn ai-stats-text
-  "Compact one-line diagnostics of an AI decision's MCTS search: the value
-   estimate for the line played, the simulation count, and the top candidate
-   moves with their visit-share weight. game-data is the state before the move."
-  [game-data {:keys [value sims candidates]}]
-  (->> (concat
-        (when value [(str "v " (fmt-val value))])
-        (when sims [(str sims " sims")])
-        (map (fn [c] (str (describe-move game-data (:move c)) " " (fmt-pct (:weight c))))
-             (take 3 candidates)))
-       (remove nil?)
+  "Compact one-line diagnostics of an AI decision's MCTS search: the top
+   candidate moves with their visit-share weight. game-data is the state before
+   the move."
+  [game-data {:keys [candidates]}]
+  (->> (take 3 candidates)
+       (map (fn [c] (str (describe-move game-data (:move c)) " " (fmt-pct (:weight c)))))
        (str/join "  ·  ")))
 
 (defn game-log-ui []
@@ -1026,8 +1036,8 @@
             [:span.player (:player entry) ":"])
           [:span.message (:message entry)]
           (when (:stats entry)
-            [:span.log-stats {:title "AI search: value estimate · simulations · top moves by visit share"}
-             (ai-stats-text (:game-state-snapshot entry) (:stats entry))])]))
+            (let [txt (ai-stats-text (:game-state-snapshot entry) (:stats entry))]
+              [:span.log-stats {:title txt} txt]))]))
       [:div.log-empty "No events yet..."])]])
 
 (defn game-over-main-pane [game-data]

@@ -138,27 +138,27 @@
    uses random rollouts (generation 0)."
   [{:keys [games out threads model] :or {threads n-cores} :as opts}]
   (io/make-parents out)
-  (prof/profile (let [opts (assoc opts :evaluate (evaluator-for model))
-         _ (println (format "Self-play with %s" (if model (str "model " model) "random rollouts")))
-         t0 (System/currentTimeMillis)
-         done (atom 0)
-         results (par-map threads
-                          (fn [_]
-                            (let [r (play-training-game opts)]
-                              (println (format "  game %d/%d done: %d examples, winner seat %d, %d rounds"
-                                               (swap! done inc) games
-                                               (count (:examples r)) (:winner-idx r) (:rounds r)))
-                              r))
-                          (range games))
-         total-ex (reduce + (map #(count (:examples %)) results))]
-     (println (format "Running %d games on %d threads..." games threads))
-     (with-open [w (io/writer out :append true)]
-       (doseq [r results, ex (:examples r)]
-         (.write w (json/generate-string ex))
-         (.write w "\n")))
-     (let [secs (/ (- (System/currentTimeMillis) t0) 1000.0)]
-       (println (format "\nWrote %d examples from %d games to %s in %.1fs (%.0f examples/s)"
-                        total-ex games out secs (/ total-ex secs)))))))
+  (let [opts (assoc opts :evaluate (evaluator-for model))
+        _ (println (format "Self-play with %s" (if model (str "model " model) "random rollouts")))
+        t0 (System/currentTimeMillis)
+        done (atom 0)
+        results (par-map threads
+                         (fn [_]
+                           (let [r (play-training-game opts)]
+                             (println (format "  game %d/%d done: %d examples, winner seat %d, %d rounds"
+                                              (swap! done inc) games
+                                              (count (:examples r)) (:winner-idx r) (:rounds r)))
+                             r))
+                         (range games))
+        total-ex (reduce + (map #(count (:examples %)) results))]
+    (println (format "Running %d games on %d threads..." games threads))
+    (with-open [w (io/writer out :append true)]
+      (doseq [r results, ex (:examples r)]
+        (.write w (json/generate-string ex))
+        (.write w "\n")))
+    (let [secs (/ (- (System/currentTimeMillis) t0) 1000.0)]
+      (println (format "\nWrote %d examples from %d games to %s in %.1fs (%.0f examples/s)"
+                       total-ex games out secs (/ total-ex secs))))))
 
 ;; --------------------------------------------------------------------------
 ;; Per-seat model play: each seat can use a different network. This is how the
