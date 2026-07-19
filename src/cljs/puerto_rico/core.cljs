@@ -5,8 +5,7 @@
             [reagent.dom.client :as rdc]
             [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]
-            [puerto-rico.ai.heuristic :as ai]
-            [puerto-rico.ai.personalities :as personalities]))
+            [puerto-rico.ai.heuristic :as ai]))
 
 ;; Forward declarations for functions used before definition
 (declare handle-automatic-role-execution check-ai-turn!)
@@ -297,26 +296,26 @@
 ;; Mayor placement (human)
 ;; --------------------------------------------------------------------------
 
-(defn handle-mayor-place [dest-kind dest-key]
+(defn- mayor-move! [args]
   (let [current-game (:game-state @game-state)
         executor (current-role-executor current-game)]
     (when executor
       (swap! game-state assoc :game-state
              (rules/apply-move current-game
                                {:type :role-action :role :mayor
-                                :player-id (:id executor)
-                                :args [:place-colonist dest-kind dest-key]})))))
+                                :player-id (:id executor) :args args})))))
+
+;; Click an empty circle to place a colonist from hand; click a filled circle
+;; to take it back into hand. dest-kind is :plantation or :building; idx is the
+;; tile's position on that player's board.
+(defn handle-mayor-place-at [dest-kind idx] (mayor-move! [:place-at dest-kind idx]))
+(defn handle-mayor-remove-at [dest-kind idx] (mayor-move! [:remove-at dest-kind idx]))
 
 (defn handle-mayor-done []
-  (let [current-game (:game-state @game-state)
-        executor (current-role-executor current-game)]
-    (when executor
-      (when-not (:is-ai executor)
-        (add-log-entry "👷 Done placing colonists" (:name executor)))
-      (swap! game-state assoc :game-state
-             (rules/apply-move current-game
-                               {:type :role-action :role :mayor
-                                :player-id (:id executor) :args []})))))
+  (let [executor (current-role-executor (:game-state @game-state))]
+    (when (and executor (not (:is-ai executor)))
+      (add-log-entry "👷 Done placing colonists" (:name executor)))
+    (mayor-move! [])))
 
 (defn handle-mayor-auto-place
   "Place all remaining colonists with the heuristic, then finish the turn"
@@ -500,24 +499,43 @@
              (when (not= (:game-state old-val) (:game-state new-val))
                (js/setTimeout check-ai-turn! 50))))
 
+;; --------------------------------------------------------------------------
+;; Visual helpers
+;; --------------------------------------------------------------------------
+
+(def good-color
+  {:coffee "#5c3d2e" :corn "#b3982f" :indigo "#3b4d7a"
+   :sugar "#cdb67c" :tobacco "#7a3f38" :quarry "#8f8b84"})
+
+(defn titlecase [s]
+  (str/join " " (map str/capitalize (str/split (str/replace (name s) "-" " ") #" "))))
+
+(defn dot [good]
+  [:span.dot {:style {:background-color (get good-color good "#8f8b84")}}])
+
+(defn worker-pips [occupied total]
+  [:span.pips
+   (for [i (range total)]
+     ^{:key i} [:span.pip {:class (if (< i occupied) "filled" "empty")}])])
+
 ;; Components
 (defn role-card [role available? gold-amount on-select]
   [:div.role-card {:class    (when-not available? "disabled")
                    :on-click (when available? #(on-select role))}
-   [:h3 (role-display-name role)]
-   (when (and gold-amount (> gold-amount 0))
-     [:div.gold-coins
-      [:span.gold-icon "💰"]
-      [:span.gold-amount gold-amount]])
-   [:p (case role
-         :settler "Take a plantation"
-         :mayor "Get colonists"
-         :builder "Build buildings"
-         :craftsman "Produce goods"
-         :trader "Sell to trading house"
-         :captain "Ship goods for VP"
-         (:prospector :prospector-2) "Get money"
-         "Choose this role")]])
+   [:div.role-card-head
+    [:span.role-card-title (titlecase (role-display-name role))]
+    (when (and gold-amount (> gold-amount 0))
+      [:span.role-gold (str "+$" gold-amount)])]
+   [:span.role-card-desc
+    (case role
+      :settler "Take a plantation"
+      :mayor "Get colonists"
+      :builder "Build buildings"
+      :craftsman "Produce goods"
+      :trader "Sell to trading house"
+      :captain "Ship goods for VP"
+      (:prospector :prospector-2) "Get money"
+      "Choose this role")]])
 
 (defn plantation-choice-ui [game-data]
   (let [face-up-plantations (:face-up-plantations game-data)
@@ -584,66 +602,63 @@
           [:p "Don't take any tile"]]]])]))
 
 (defn building-card
-  "Renders a building card with cost in first circle, worker slots, and VP in corner"
-  [building-key building-info on-click available-count]
-  (let [cost (:cost building-info)
-        vp (:vp building-info)
-        worker-slots (:worker building-info)
-        building-name (-> building-key name (str/replace "-" " "))
-        description (:description building-info)]
-    [:div.building-card {:on-click on-click}
-     ;; VP in top right corner
-     [:div.building-vp vp]
-
-     ;; Building name
-     [:div.building-name building-name]
-
-     ;; Worker slots - all empty circles
+  "One building in the builder tableau. Buildable cards are clickable and show
+   the price the player will actually pay (after quarry/privilege discounts);
+   owned and unaffordable cards are shown dimmed, like an in-play board."
+  [game-data player building-key]
+  (let [info (get state/buildings building-key)
+        owned? (some #(= (:type %) building-key) (:buildings player))
+        buildable? (rules/can-build-building? game-data player building-key)
+        base-cost (:cost info)
+        cost (rules/building-cost game-data player building-key)
+        discount (- base-cost cost)
+        supply (get-in game-data [:building-supply building-key] 0)
+        state-class (cond owned? "owned" buildable? "buildable" :else "locked")]
+    [:div.building-card {:class state-class
+                         :on-click (when buildable? #(handle-building-choice building-key))}
+     [:div.building-card-top
+      [:span.building-cost-badge (if (pos? discount) (str "$" cost) (str "$" base-cost))]
+      [:span.building-name (titlecase building-key)]
+      [:span.building-vp (str (:vp info) " VP")]]
      [:div.worker-slots
-      (for [i (range worker-slots)]
-        ^{:key i}
-        [:div.worker-circle])]
+      (for [i (range (:worker info))]
+        ^{:key i} [:span.worker-circle])]
+     (when (:description info)
+       [:div.building-benefit (:description info)])
+     [:div.building-card-foot
+      (cond
+        owned? [:span.building-tag "Built"]
+        (not buildable?) [:span.building-tag.locked-tag "Can't build"]
+        (pos? discount) [:span.building-tag.discount-tag (str "was $" base-cost)]
+        :else [:span])
+      [:span.building-supply (str supply " left")]]]))
 
-     ;; Full ability description (untruncated)
-     (when description
-       [:div.building-benefit description])
-
-     ;; Available count
-     [:div.building-available (str "Available: " available-count)]
-
-     ;; Cost in bottom right
-     [:div.building-cost (str "$" cost)]]))
+;; The board groups buildings into four columns by cost tier
+(def building-columns
+  {1 [:small-indigo-maker :small-sugar-maker :small-market :hacienda :construction-hut :small-warehouse]
+   2 [:large-indigo-maker :large-sugar-maker :hospice :office :large-market :large-warehouse]
+   3 [:tobacco-maker :coffee-maker :factory :university :harbor :wharf]
+   4 [:guild-hall :residence :customs-house :city-hall :fortress]})
 
 (defn building-choice-ui [game-data]
-  (let [current-player-data (current-role-executor game-data)
-        ;; Same legality check the engine uses (discounts, supply, city space)
-        affordable-buildings (filter (fn [[building-key _]]
-                                       (rules/can-build-building? game-data current-player-data building-key))
-                                     state/buildings)]
+  (let [player (current-role-executor game-data)
+        any-buildable? (some #(rules/can-build-building? game-data player %)
+                             (keys state/buildings))]
     [:div.role-execution
-     [:h2 "🏗️ Builder - Choose a Building"]
-     (if (seq affordable-buildings)
-       [:div
-        [:p "Select a building to construct or skip (You have $" (:money current-player-data) "):"]
-        [:div.building-grid
-         ;; Building options - show the discounted price the engine will charge
-         (for [[building-key building-info] affordable-buildings]
+     [:div.panel-head
+      [:h2.panel-title "Builder — choose a building"]
+      [:span.panel-sub (str "$" (:money player) " available"
+                            (when-not any-buildable? " · nothing affordable"))]]
+     [:div.building-columns
+      (for [col [1 2 3 4]]
+        ^{:key col}
+        [:div.building-column
+         (for [building-key (get building-columns col)]
            ^{:key building-key}
-           [building-card building-key
-            (assoc building-info :cost (rules/building-cost game-data current-player-data building-key))
-            #(handle-building-choice building-key)
-            (get (:building-supply game-data) building-key 0)])
-         ;; Skip option
-         ^{:key "skip"}
-         [:div.choice-card.skip {:on-click #(handle-skip-role :builder)}
-          [:h3 "Skip"]
-          [:p "Don't build anything"]]]]
-       [:div
-        [:p (:name current-player-data) " cannot afford any buildings (You have $" (:money current-player-data) ")."]
-        [:div.choice-grid
-         [:div.choice-card.skip {:on-click #(handle-skip-role :builder)}
-          [:h3 "Skip"]
-          [:p "Can't afford buildings"]]]])]))
+           [building-card game-data player building-key])])]
+     [:div.builder-actions
+      [:button.skip-button {:on-click #(handle-skip-role :builder)}
+       "Skip — don't build"]]]))
 
 (defn good-choice-ui [game-data role]
   (let [current-player-data (current-role-executor game-data)
@@ -715,44 +730,58 @@
           [:h3 "Skip"]
           [:p "No goods available"]]]])]))
 
+(defn mayor-tile
+  "One board tile in the mayor screen: a colored dot, the name, and a clickable
+   worker circle per slot. Filled circles remove a colonist to hand; empty
+   circles place one from hand (disabled when the hand is empty)."
+  [dest-kind idx tile hand]
+  (let [cap (if (= dest-kind :plantation)
+              1
+              (get-in state/buildings [(:type tile) :worker] 1))
+        occ (:colonists tile 0)]
+    [:div.mayor-tile
+     (if (= dest-kind :plantation)
+       [dot (:type tile)]
+       [:span.dot.dot-building])
+     [:span.tile-name (titlecase (:type tile))]
+     [:div.mayor-circles
+      (for [i (range cap)]
+        ^{:key i}
+        (if (< i occ)
+          [:button.mayor-circle.filled
+           {:title "Remove worker" :on-click #(handle-mayor-remove-at dest-kind idx)}]
+          [:button.mayor-circle.empty
+           {:title "Add worker" :disabled (zero? hand)
+            :on-click #(handle-mayor-place-at dest-kind idx)}]))]]))
+
 (defn mayor-placement-ui [game-data]
   (let [executor (current-role-executor game-data)
         hand (:colonists-in-hand executor)
-        {:keys [plantations buildings]} (rules/placement-destinations executor)
-        can-place (and (pos? hand) (or (seq plantations) (seq buildings)))]
+        must-place? (and (pos? hand) (pos? (rules/empty-circle-count executor)))]
     [:div.role-execution
-     [:h2 "👷 Mayor - Place Your Colonists"]
-     [:p "Your board was picked up for re-arrangement. Colonists in hand: "
-      [:strong hand]]
-     (if can-place
-       [:div
-        (when (seq plantations)
-          [:div
-           [:p "🌱 Place on a plantation:"]
-           [:div.choice-grid
-            (for [p (sort plantations)]
-              ^{:key (str "place-p-" (name p))}
-              [:div.choice-card {:on-click #(handle-mayor-place :plantation p)}
-               [:h3 (name p)]])]])
-        (when (seq buildings)
-          [:div
-           [:p "🏢 Place in a building:"]
-           [:div.choice-grid
-            (for [b (sort buildings)]
-              ^{:key (str "place-b-" (name b))}
-              [:div.choice-card {:on-click #(handle-mayor-place :building b)}
-               [:h3 (str/replace (name b) "-" " ")]])]])
-        [:div.choice-grid
-         [:div.choice-card.skip {:on-click handle-mayor-auto-place}
-          [:h3 "Auto-place rest"]
-          [:p "Let the computer finish"]]]]
-       ;; Nothing placeable (hand empty or board full): the turn can end
-       [:div.choice-grid
-        [:div.choice-card.skip {:on-click handle-mayor-done}
-         [:h3 "Done"]
-         [:p (if (pos? hand)
-               (str hand " colonist(s) to San Juan")
-               "Finish placing")]]])]))
+     [:div.panel-head
+      [:h2.panel-title "Mayor — place colonists"]
+      [:span.panel-sub (str hand " in hand")]]
+     [:p.muted "Click an empty circle to assign a colonist, or a filled circle to take one back."]
+     [:div.mayor-board
+      (when (seq (:plantations executor))
+        [:div.mayor-group
+         [:div.section-label "Plantations"]
+         [:div.mayor-tiles
+          (for [[idx t] (map-indexed vector (:plantations executor))]
+            ^{:key (str "p" idx)} [mayor-tile :plantation idx t hand])]])
+      (when (seq (:buildings executor))
+        [:div.mayor-group
+         [:div.section-label "Buildings"]
+         [:div.mayor-tiles
+          (for [[idx t] (map-indexed vector (:buildings executor))]
+            ^{:key (str "b" idx)} [mayor-tile :building idx t hand])]])]
+     [:div.builder-actions
+      [:button.skip-button {:on-click handle-mayor-auto-place} "Auto-place"]
+      [:button.done-button {:disabled must-place? :on-click handle-mayor-done}
+       (cond must-place? "Fill all circles first"
+             (pos? hand) (str "Done — " hand " to San Juan")
+             :else "Done")]]]))
 
 (defn storage-choice-ui [game-data]
   (let [executor-idx (:role-execution-current-idx game-data)
@@ -830,57 +859,66 @@
   (get-in state/buildings [building-type :worker] 1))
 
 (defn player-board [player current?]
-  [:div.player-board {:class (when current? "current-player")}
-   [:div.player-header
-    [:h4.player-name (str (:name player)
-                          (when (:is-ai player)
-                            (str " (" (personalities/personality-name (:personality player)) ")"))
-                          (when current? " ⭐"))]
-    [:div.player-quick-stats
-     [:span.money-badge "💰$" (:money player)]
-     [:span.vp-badge "🏆" (:victory-points player)]
-     [:span.san-juan-badge "🏘️" (get player :san-juan-colonists 0)]]]
+  (let [me? (not (:is-ai player))
+        san-juan (get player :san-juan-colonists 0)
+        goods (filter #(pos? (second %)) (:goods player))]
+    [:div.player-card {:class (when current? "active")}
+     [:div.player-card-head
+      [:span.player-name (:name player)]
+      [:span.badge {:class (if me? "badge-you" "badge-ai")}
+       (cond (and current? me?) "You · to act"
+             current? "to act"
+             me? "You"
+             :else "AI")]]
+     [:div.player-stats
+      [:div.pstat [:span.pstat-label "Doubloons"] [:span.pstat-value (str "$" (:money player))]]
+      [:div.pstat [:span.pstat-label "Victory"] [:span.pstat-value (:victory-points player)]]
+      [:div.pstat [:span.pstat-label "Buildings"] [:span.pstat-value (count (:buildings player))]]]
 
-   [:div.player-assets
-    ;; Buildings (more compact)
-    (when (seq (:buildings player))
-      [:div.buildings-compact
-       [:strong "🏢 "]
-       (for [[idx building] (map-indexed vector (:buildings player))]
-         (let [building-type (if (map? building) (:type building) building)
-               occupied (if (map? building) (:colonists building 0) 0)
-               total-capacity (get-building-capacity building-type)]
-           ^{:key idx} [:span.building-chip
-                        (str (name building-type) " " (worker-slots-display occupied total-capacity))]))])
+     (when (seq (:plantations player))
+       [:div.card-section
+        [:div.section-label "Plantations"]
+        [:div.tile-list
+         (for [[idx p] (map-indexed vector (:plantations player))]
+           ^{:key idx}
+           [:div.tile-row
+            [dot (:type p)]
+            [:span.tile-name (name (:type p))]
+            [:span.tile-status (if (pos? (:colonists p 0)) "worked" "vacant")]])]])
 
-    ;; Plantations (more compact)
-    (when (seq (:plantations player))
-      [:div.plantations-compact
-       [:strong "🌱 "]
-       (for [[idx plantation] (map-indexed vector (:plantations player))]
-         (let [plantation-type (if (map? plantation) (:type plantation) plantation)
-               occupied (if (map? plantation) (:colonists plantation 0) 0)
-               total-capacity 1]                            ; plantations always have 1 worker slot
-           ^{:key idx} [:span.plantation-chip
-                        (str (name plantation-type) " " (worker-slots-display occupied total-capacity))]))])
+     (when (seq (:buildings player))
+       [:div.card-section
+        [:div.section-label "Buildings"]
+        [:div.tile-list
+         (for [[idx b] (map-indexed vector (:buildings player))]
+           (let [cap (get-building-capacity (:type b))]
+             ^{:key idx}
+             [:div.tile-row
+              [:span.dot.dot-building]
+              [:span.tile-name (titlecase (:type b))]
+              [worker-pips (:colonists b 0) cap]]))]])
 
-    ;; Goods (inline)
-    (let [goods-with-amounts (filter #(> (second %) 0) (:goods player))]
-      (when (seq goods-with-amounts)
-        [:div.goods-compact
-         [:strong "📦 "]
-         (for [[good amount] goods-with-amounts]
-           ^{:key good} [:span.good-chip (str (name good) ":" amount)])]))]])
+     (when (seq goods)
+       [:div.card-section
+        [:div.section-label "Goods"]
+        [:div.good-tags
+         (for [[good amount] goods]
+           ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count amount]])]])
+
+     (when (pos? san-juan)
+       [:div.card-section
+        [:div.section-label "San Juan"]
+        [:span.muted (str san-juan " colonist" (when (> san-juan 1) "s"))]])]))
 
 (defn game-log-ui []
   [:div.game-log
-   [:h3 "📜 Game Log"
+   [:div.panel-head
+    [:h2.panel-title "Game log"]
     (when (:active @historical-view)
       [:span.historical-indicator
-       " (Viewing Historical State - "
+       "viewing history "
        [:button.back-to-current {:on-click return-to-current-state}
-        "Back to Current"]
-       ")"])]
+        "back to current"]])]
    [:div.log-entries
     (if (seq @game-log)
       ;; Show all entries in chronological order (oldest first)
@@ -949,146 +987,157 @@
     (cond
       ;; Normal game display (including game over overlay)
       game-data
-      (let [current-player-data (current-player game-data)]
-        [:div.game-board-compact
+      (let [current-player-data (current-player game-data)
+            executor (current-role-executor game-data)
+            phase-label (cond
+                          (:game-over game-data) "Game over"
+                          (= (:phase game-data) :role-selection) "Role selection"
+                          (:storage-phase game-data) "Captain · storage"
+                          (:craftsman-privilege-pending game-data) "Craftsman · privilege"
+                          (:selected-role game-data) (titlecase (role-display-name (:selected-role game-data)))
+                          :else (titlecase (:phase game-data)))
+            turn-name (cond (:game-over game-data) "—"
+                            (= (:phase game-data) :role-execution) (:name executor)
+                            current-player-data (:name current-player-data)
+                            :else "—")]
+        [:div.board
          ;; Historical state indicator
          (when is-historical
            [:div.historical-banner
-            "📊 Viewing Historical State - Log Entry #" (:log-index display-state)])
+            "Viewing historical state — log entry #" (:log-index display-state)])
 
-         ;; Expanded header bar with game state info
-         [:div.header-bar-expanded
-          [:div.header-row-1
-           [:h2 "🏝️ Puerto Rico"]
-           [:div.game-status
-            [:span.status-item "📅 Round " (:round game-data)]
-            [:span.status-item
-             (if (:game-over game-data)
-               "🏆 Game Over"
-               (str "⚡ " (name (:phase game-data))))]
-            [:span.status-item "👑 " (:name (state/current-governor game-data))]
-            [:span.status-item "👤 " (if current-player-data
-                                       (:name current-player-data)
-                                       "None")]]]
+         ;; Header panel
+         [:div.board-header
+          [:div.header-top
+           [:div.title-block
+            [:h1.game-title "Puerto Rico"]
+            [:span.round-label (str "Round " (:round game-data))]]
+           [:div.header-meta
+            [:span.meta-label "Phase"]
+            [:span.phase-pill phase-label]
+            [:span.meta-sep]
+            [:span.meta-label "Current turn"]
+            [:span.meta-value turn-name]]]
 
-          [:div.header-row-2
-           ;; Key supplies
-           [:div.supply-group
-            [:span.supply-label "🏆 VP: "] [:span.supply-value (:victory-point-supply game-data)]
-            [:span.supply-label "👥 Colonists: "] [:span.supply-value (:colonist-supply game-data)]
-            [:span.supply-label "🚢 Ship: "] [:span.supply-value (get game-data :colonist-ship 0)]]
+          [:div.header-stats
+           [:div.stat-block
+            [:span.stat-label "VP pool"]
+            [:span.stat-num (:victory-point-supply game-data)]]
+           [:div.stat-block
+            [:span.stat-label "Colonists"]
+            [:span.stat-num (:colonist-supply game-data)]]
+           [:div.stat-block
+            [:span.stat-label "Ship"]
+            [:span.stat-num (get game-data :colonist-ship 0)]]
+           [:div.stat-block
+            [:span.stat-label "Quarries"]
+            [:span.stat-num (get game-data :quarry-supply 0)]]
+           [:div.stat-block.stat-wide
+            [:span.stat-label "Plantations available"]
+            [:div.chip-row
+             (for [[ptype n] (sort-by (comp name first) (frequencies (:face-up-plantations game-data)))]
+               ^{:key ptype}
+               [:span.chip [dot ptype] (name ptype) (when (> n 1) (str " ×" n))])
+             [:span.chip-muted (str "deck " (count (:plantation-supply game-data))
+                                    " · discard " (count (:plantation-discard game-data)))]]]]
 
-           ;; Available plantations
-           [:div.supply-group
-            [:span.supply-label "🌱 Plantations: "]
-            (let [face-up (:face-up-plantations game-data)
-                  deck-count (count (:plantation-supply game-data))
-                  discard-count (count (:plantation-discard game-data))]
-              [:span
-               (for [[idx plantation-type] (map-indexed vector face-up)]
-                 ^{:key idx} [:span.supply-chip (name plantation-type)])
-               [:span.supply-chip (str "deck:" deck-count)]
-               [:span.supply-chip (str "discard:" discard-count)]
-               [:span.supply-chip (str "quarries:" (get game-data :quarry-supply 0))]])]
-
-           ;; Goods supply
-           [:div.supply-group
-            [:span.supply-label "📦 Goods: "]
-            (for [[good count] (sort-by first (:goods-supply game-data))]
-              ^{:key good} [:span.supply-chip (str (name good) ":" count)])]
-
-           ;; Trading house
+          [:div.header-supply
+           [:div.supply-block
+            [:span.stat-label "Goods in supply"]
+            [:div.good-tags
+             (for [[good n] (sort-by (comp name first) (:goods-supply game-data))]
+               ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count n]])]]
+           [:div.supply-block
+            [:span.stat-label "Cargo ships"]
+            [:div.chip-row
+             (for [[idx ship] (map-indexed vector (:ships game-data))]
+               ^{:key idx}
+               [:span.chip
+                (if (:good ship)
+                  [:span [dot (:good ship)] (str (name (:good ship)) " " (:amount ship 0) " / " (:capacity ship 0))]
+                  (str "empty / " (:capacity ship 0)))])]]
            (when (seq (:trading-house game-data))
-             [:div.supply-group
-              [:span.supply-label "🏪 Trading: "]
-              (for [item (:trading-house game-data)]
-                (let [good-name (if (map? item) (:good item) item)]
-                  ^{:key (str "th-" good-name)} [:span.supply-chip (name good-name)]))])
+             [:div.supply-block
+              [:span.stat-label "Trading house"]
+              [:div.chip-row
+               (for [[idx item] (map-indexed vector (:trading-house game-data))]
+                 (let [g (if (map? item) (:good item) item)]
+                   ^{:key idx} [:span.chip [dot g] (name g)]))]])]]
 
-           ;; Ships
-           [:div.supply-group
-            [:span.supply-label "⛵ Ships: "]
-            (for [[idx ship] (map-indexed vector (:ships game-data))]
-              ^{:key idx} [:span.supply-chip
-                           (if (:good ship)
-                             (str (name (:good ship)) " " (:amount ship 0) "/" (:capacity ship 0))
-                             (str "Empty/" (:capacity ship 0)))])]]]
+         ;; Players (highlight the player who must actually act now)
+         (let [acting-idx (if (= (:phase game-data) :role-execution)
+                            (:role-execution-current-idx game-data)
+                            (:current-player-idx game-data))]
+           [:div.players-row
+            (for [[idx player] (map-indexed vector (:players game-data))]
+              ^{:key (:id player)}
+              [player-board player (= idx acting-idx)])])
 
-         ;; Players in horizontal row (compact)
-         [:div.players-row
-          (for [[idx player] (map-indexed vector (:players game-data))]
-            ^{:key (:id player)}
-            [player-board player (= idx (:current-player-idx game-data))])]
-
-         ;; Main content area - action area (1/3) and game log (2/3)
-         [:div.main-content-area
-          [:div.action-area-narrow
-           (cond
+         ;; Full-width action panel (buildings get room to lay out like the board)
+         [:div.action-panel
+          (cond
              ;; Show game over screen in main pane
-             (:game-over game-data)
-             [game-over-main-pane game-data]
+            (:game-over game-data)
+            [game-over-main-pane game-data]
 
              ;; Historical state - just show static info
-             is-historical
-             [:div.historical-view
-              [:h3 "📊 Historical Game State"]
-              [:p "This is the game state before the selected log entry was executed."]
-              [:p "Game interactions are disabled in historical view."]]
+            is-historical
+            [:div.historical-view
+             [:h2.panel-title "Historical state"]
+             [:p.muted "This is the game state before the selected log entry. Interactions are disabled."]]
 
              ;; Current state - show interactive elements
-             :else
-             (let [executor (current-role-executor game-data)
-                   ;; Determine if we need to show AI button
-                   ai-player (cond
-                               ;; Role execution phase - check if executor is AI
-                               (= (:phase game-data) :role-execution)
-                               (when (:is-ai executor) executor)
-                               ;; Role selection phase - check if current player is AI
-                               (= (:phase game-data) :role-selection)
-                               (when (:is-ai current-player-data) current-player-data)
-                               ;; Default
-                               :else nil)]
-               (cond
+            :else
+            (let [ai-player (cond
+                              (= (:phase game-data) :role-execution)
+                              (when (:is-ai executor) executor)
+                              (= (:phase game-data) :role-selection)
+                              (when (:is-ai current-player-data) current-player-data)
+                              :else nil)]
+              (cond
                  ;; Auto-execute AI turns with visual feedback
-                 ai-player
-                 (let [ai-display @ai-action-display]
-                   (if (:show ai-display)
-                     [:div.ai-action-display
-                      [:h3 "🤖 " (:player ai-display)]
-                      [:p (:action ai-display)]]
-                     [:div.waiting
-                      [:h3 "⏳ AI Processing"]
-                      [:p (:name ai-player) " is making a decision..."]]))
+                ai-player
+                (let [ai-display @ai-action-display]
+                  [:div.ai-thinking
+                   [:div.section-label "AI turn"]
+                   [:div.ai-player-name (:name ai-player)]
+                   [:div.ai-action-text (if (:show ai-display)
+                                          (:action ai-display)
+                                          "Making a decision…")]])
 
                  ;; Role execution phase - human turn
-                 (= (:phase game-data) :role-execution)
-                 [role-execution-ui game-data]
+                (= (:phase game-data) :role-execution)
+                [role-execution-ui game-data]
 
                  ;; Role selection phase - human turn
-                 :else
-                 [:div.roles-section-compact
-                  [:h3 "🎭 Available Roles"]
-                  [:div.roles-grid-compact
-                   (for [role (or (:roles game-data) state/roles)]
-                     (let [available? (contains? (:available-roles game-data) role)
-                           gold-amount (get-in game-data [:role-gold role] 0)]
-                       ^{:key role} [role-card role available? gold-amount handle-role-selection]))]])))]
+                :else
+                [:div.roles-section
+                 [:div.panel-head
+                  [:h2.panel-title "Choose a role"]
+                  [:span.panel-sub (str "Your turn, " (:name current-player-data))]]
+                 [:div.roles-grid
+                  (for [role (or (:roles game-data) state/roles)]
+                    (let [available? (contains? (:available-roles game-data) role)
+                          gold-amount (get-in game-data [:role-gold role] 0)]
+                      ^{:key role} [role-card role available? gold-amount handle-role-selection]))]])))]
 
-          [:div.game-log-expanded
-           [game-log-ui]]]])
+         ;; Full-width game log at the bottom
+         [:div.log-panel
+          [game-log-ui]]])
 
       ;; No game started
       :else
-      [:div.no-game
-       [:h1 "🏝️ Puerto Rico"]
-       [:p "Welcome to the Puerto Rico board game!"]
-       [:div.game-mode-selection
-        [:button.game-mode-button {:on-click #(swap! game-state assoc :game-state (create-new-game))}
-         "👤 Play as Human"
-         [:p.button-description "Play against AI opponents"]]
-        [:button.game-mode-button {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
-         "🤖 Watch AI Battle"
-         [:p.button-description "Watch 3 AI players compete"]]]])))
+      [:div.start-screen
+       [:div.start-card
+        [:h1.game-title "Puerto Rico"]
+        [:p.start-tagline "A colonial economy in miniature — race for victory points against the AI."]
+        [:div.start-actions
+         [:button.start-button {:on-click #(swap! game-state assoc :game-state (create-new-game))}
+          [:span.start-button-title "Play as human"]
+          [:span.start-button-desc "Take a seat against two AI opponents"]]
+         [:button.start-button.secondary {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
+          [:span.start-button-title "Watch AI battle"]
+          [:span.start-button-desc "Three MCTS players compete"]]]]])))
 
 (defn main-panel []
   [game-board])

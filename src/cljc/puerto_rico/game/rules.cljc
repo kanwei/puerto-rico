@@ -216,14 +216,18 @@
                                    (mod (inc idx) num-players))))]
     (mayor-next-turn game-after-ship 0)))
 
+(defn- kind->tiles-key [dest-kind]
+  (if (= dest-kind :plantation) :plantations :buildings))
+
 (defn execute-mayor-placement
-  "Place one colonist from the player's hand on a tile of the given type.
-   dest-kind is :plantation or :building."
+  "Place one colonist from the player's hand on a tile of the given TYPE (used
+   by the AI, which fills a swept board by type). dest-kind is :plantation or
+   :building."
   [game-state player-id dest-kind dest-key]
   (let [player-idx (state/player-index game-state player-id)
         player (when player-idx (get-in game-state [:players player-idx]))]
     (if (and player (pos? (:colonists-in-hand player)))
-      (let [tiles-key (if (= dest-kind :plantation) :plantations :buildings)
+      (let [tiles-key (kind->tiles-key dest-kind)
             tile-idx (first (keep-indexed
                              (fn [i tile]
                                (when (and (= (:type tile) dest-key)
@@ -235,6 +239,34 @@
               (update-in [:players player-idx tiles-key tile-idx :colonists] inc)
               (update-in [:players player-idx :colonists-in-hand] dec))
           game-state))
+      game-state)))
+
+(defn execute-mayor-place-at
+  "Place one colonist from hand onto a SPECIFIC tile (by index). Used by the
+   human UI, which shows the real board and clicks individual circles."
+  [game-state player-id dest-kind idx]
+  (let [player-idx (state/player-index game-state player-id)
+        player (when player-idx (get-in game-state [:players player-idx]))
+        tiles-key (kind->tiles-key dest-kind)
+        tile (get-in player [tiles-key idx])]
+    (if (and player (pos? (:colonists-in-hand player))
+             tile (pos? (get-empty-spaces tile)))
+      (-> game-state
+          (update-in [:players player-idx tiles-key idx :colonists] inc)
+          (update-in [:players player-idx :colonists-in-hand] dec))
+      game-state)))
+
+(defn execute-mayor-remove-at
+  "Take a colonist off a SPECIFIC tile (by index) back into hand, so the human
+   can rearrange their existing colonists."
+  [game-state player-id dest-kind idx]
+  (let [player-idx (state/player-index game-state player-id)
+        player (when player-idx (get-in game-state [:players player-idx]))
+        tile (get-in player [(kind->tiles-key dest-kind) idx])]
+    (if (and player tile (pos? (:colonists tile 0)))
+      (-> game-state
+          (update-in [:players player-idx (kind->tiles-key dest-kind) idx :colonists] dec)
+          (update-in [:players player-idx :colonists-in-hand] inc))
       game-state)))
 
 (defn- refill-colonist-ship
@@ -284,32 +316,40 @@
 (declare finish-role-execution)
 
 (defn- mayor-next-turn
-  "Hand the placement turn to each player from order-position onward, sweeping
-   their board first. Players whose hand covers every circle have no real
-   choice and are auto-filled. Refill the ship and end the role when nobody
-   is left."
+  "Hand the placement turn to each player from order-position onward.
+
+   AI players sweep their whole board into hand and re-fill it by type -
+   simpler for the search, and it lets them freely re-arrange. Auto-resolved
+   when there is no real choice (hand covers every circle, or nothing to do).
+
+   Human players keep their existing placement and just receive the newly
+   arrived colonists in hand; they add/remove workers by clicking, so we stop
+   for their decision whenever they have colonists to place.
+
+   Refill the ship and end the role when nobody is left."
   [game-state order-position]
   (let [order (:role-execution-order game-state)]
     (loop [gs game-state, pos order-position]
       (if (>= pos (count order))
         (-> gs refill-colonist-ship finish-role-execution)
         (let [idx (nth order pos)
-              gs (sweep-colonists-to-hand gs idx)
-              player (get-in gs [:players idx])
-              hand (:colonists-in-hand player)
-              circles (empty-circle-count player)]
-          (cond
-            ;; Nothing to place (no colonists, or board already full): skip
-            (or (zero? hand) (zero? circles))
-            (recur (finish-mayor-turn gs idx) (inc pos))
-
-            ;; Hand covers every circle: forced fill, no choice
-            (>= hand circles)
-            (recur (fill-all-circles gs idx) (inc pos))
-
-            ;; Real choice of where to place
-            :else
-            (assoc gs :role-execution-current-idx idx)))))))
+              ai? (get-in gs [:players idx :is-ai])]
+          (if ai?
+            ;; AI: sweep and auto-resolve where possible
+            (let [gs (sweep-colonists-to-hand gs idx)
+                  player (get-in gs [:players idx])
+                  hand (:colonists-in-hand player)
+                  circles (empty-circle-count player)]
+              (cond
+                (or (zero? hand) (zero? circles)) (recur (finish-mayor-turn gs idx) (inc pos))
+                (>= hand circles) (recur (fill-all-circles gs idx) (inc pos))
+                :else (assoc gs :role-execution-current-idx idx)))
+            ;; Human: keep the board, stop for an interactive turn if they have
+            ;; colonists in hand (otherwise nothing to place - skip)
+            (let [hand (get-in gs [:players idx :colonists-in-hand])]
+              (if (pos? hand)
+                (assoc gs :role-execution-current-idx idx)
+                (recur (finish-mayor-turn gs idx) (inc pos))))))))))
 
 (defn building-cost
   "Actual cost of a building for a player: base cost minus quarry discount
@@ -506,10 +546,13 @@
            (has-occupied-building? player :office))))
 
 (defn clear-full-trading-house [game-state]
-  "Clear trading house if it contains 4 different goods, returning goods to supply"
-  (let [trading-house (:trading-house game-state)
-        unique-goods (set (map :good trading-house))]
-    (if (>= (count unique-goods) 4)
+  "Empty the trading house at the end of the trader phase if it is FULL.
+   The house has four spaces, so 'full' means four goods total - NOT four
+   distinct kinds. An occupied office can sell a duplicate kind, so the house
+   can be full with fewer than four kinds; counting kinds here left it stuck
+   and un-clearable, which blocked all future trading."
+  (let [trading-house (:trading-house game-state)]
+    (if (>= (count trading-house) 4)
       ;; Trading house is full - return goods to supply and clear it
       (let [trading-house-goods (frequencies (map :good trading-house))]
         (-> game-state
@@ -972,10 +1015,14 @@
   "Execute the selected role with given arguments"
   (case role
     :settler (execute-settler game-state player-id (first args))
-    ;; Mayor: [:place-colonist :plantation :corn] places one colonist;
-    ;; empty args = done placing (handled by apply-move / the advance flow)
-    :mayor (if (= (first args) :place-colonist)
-             (execute-mayor-placement game-state player-id (second args) (nth args 2))
+    ;; Mayor placement ops (empty args = done, handled by the advance flow):
+    ;;   [:place-colonist :plantation :corn]  place by type   (AI, swept board)
+    ;;   [:place-at :building 2]              place on tile 2  (human)
+    ;;   [:remove-at :plantation 0]           un-man tile 0    (human rearrange)
+    :mayor (case (first args)
+             :place-colonist (execute-mayor-placement game-state player-id (second args) (nth args 2))
+             :place-at (execute-mayor-place-at game-state player-id (second args) (nth args 2))
+             :remove-at (execute-mayor-remove-at game-state player-id (second args) (nth args 2))
              game-state)
     :builder (execute-builder game-state player-id (first args))
     ;; Craftsman: table-wide production, then possibly the selector's

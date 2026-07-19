@@ -25,6 +25,7 @@
             [puerto-rico.ai.actions :as actions]
             [puerto-rico.ai.encoder :as encoder]
             [puerto-rico.ai.mcts :as mcts]
+            [puerto-rico.ai.nn :as nn]
             [puerto-rico.ai.heuristic :as heuristic]))
 
 (def score-norm
@@ -32,7 +33,26 @@
   60.0)
 
 (defn- mk-game [n]
-  (state/new-game-state (mapv #(state/new-player (inc %) (str "P" (inc %))) (range n))))
+  ;; every seat is AI-driven in self-play / arena / eval, so mark them :is-ai -
+  ;; this selects the engine's clear-and-refill mayor path (what the AI trains on)
+  (state/new-game-state (mapv #(assoc (state/new-player (inc %) (str "P" (inc %))) :is-ai true)
+                              (range n))))
+
+;; --------------------------------------------------------------------------
+;; Evaluators: a model spec is nil / "rollout" (random playouts) or a path to
+;; an ONNX model. Loaded models are cached so a champion shared across seats
+;; and games opens exactly one ONNX session.
+;; --------------------------------------------------------------------------
+
+(def ^:private model-cache (atom {}))
+
+(defn evaluator-for
+  "MCTS evaluator for a model spec (nil/'rollout' -> random rollouts)"
+  [spec]
+  (if (or (nil? spec) (= spec "rollout"))
+    (mcts/rollout-evaluator)
+    (nn/evaluator (or (get @model-cache spec)
+                      (get (swap! model-cache assoc spec (nn/load-model spec)) spec)))))
 
 (defn- dense-policy [visits]
   (let [total (double (max 1 (reduce + (vals visits))))]
@@ -109,10 +129,14 @@
       (finally (.shutdown pool)))))
 
 (defn generate!
-  "Play games in parallel and append training examples to a JSONL file"
-  [{:keys [games out threads] :or {threads n-cores} :as opts}]
+  "Play games in parallel and append training examples to a JSONL file.
+   With :model set, self-play is guided by that ONNX network; otherwise it
+   uses random rollouts (generation 0)."
+  [{:keys [games out threads model] :or {threads n-cores} :as opts}]
   (io/make-parents out)
-  (let [t0 (System/currentTimeMillis)
+  (let [opts (assoc opts :evaluate (evaluator-for model))
+        _ (println (format "Self-play with %s" (if model (str "model " model) "random rollouts")))
+        t0 (System/currentTimeMillis)
         done (atom 0)
         results (par-map threads
                          (fn [_]
@@ -131,6 +155,63 @@
     (let [secs (/ (- (System/currentTimeMillis) t0) 1000.0)]
       (println (format "\nWrote %d examples from %d games to %s in %.1fs (%.0f examples/s)"
                        total-ex games out secs (/ total-ex secs))))))
+
+;; --------------------------------------------------------------------------
+;; Per-seat model play: each seat can use a different network. This is how the
+;; engine "picks a model per player" and how a new generation is measured
+;; against the previous one.
+;; --------------------------------------------------------------------------
+
+(defn play-eval-game
+  "Play one game where seat i is driven by evaluators[i]. Returns winning seat."
+  [{:keys [players simulations evaluators max-decisions]
+    :or {players 3 simulations 100 max-decisions 2000}}]
+  (loop [gs (mk-game players), decision 0]
+    (cond
+      (:game-over gs)
+      (state/player-index gs (get-in gs [:winner :id]))
+
+      (> decision max-decisions)
+      (throw (ex-info "eval game did not terminate" {:decisions decision}))
+
+      :else
+      (let [seat (actions/actor-index gs)
+            pid (:id (actions/actor-player gs))
+            move (mcts/ai-select-move gs pid {:simulations simulations
+                                              :evaluate (nth evaluators seat)})]
+        (recur (rules/apply-move gs move) (inc decision))))))
+
+(defn versus
+  "Head-to-head evaluation: the challenger occupies one seat and the champion
+   the rest, with the challenger's seat rotating for fairness. Reports the
+   challenger's win rate (a challenger no stronger than the champion wins the
+   1/players baseline). champion nil/'rollout' pits the challenger vs rollouts.
+   Prints a machine-readable RESULT line for the training loop."
+  [{:keys [challenger champion games players simulations threads]
+    :or {games 30 players 3 simulations 100 threads n-cores}}]
+  (println (format "Versus: challenger=%s  champion=%s  (%d games, %d sims, %d threads)"
+                   challenger (or champion "rollout") games simulations threads))
+  (let [chal-ev (evaluator-for challenger)
+        champ-ev (evaluator-for champion)
+        outcomes (par-map threads
+                          (fn [i]
+                            (let [chal-seat (mod i players)
+                                  evs (mapv #(if (= % chal-seat) chal-ev champ-ev)
+                                            (range players))
+                                  winner (play-eval-game {:players players
+                                                          :simulations simulations
+                                                          :evaluators evs})]
+                              (= winner chal-seat)))
+                          (range games))
+        wins (count (filter true? outcomes))
+        winrate (double (/ wins games))]
+    (println (format "\nChallenger won %d/%d (%.1f%%) - baseline for equal strength is %.1f%%"
+                     wins games (* 100.0 winrate) (/ 100.0 players)))
+    (println (str "RESULT " (json/generate-string
+                             {:challenger challenger :champion (or champion "rollout")
+                              :wins wins :games games :winrate winrate
+                              :baseline (/ 1.0 players)})))
+    {:wins wins :games games :winrate winrate}))
 
 ;; --------------------------------------------------------------------------
 ;; Arena: MCTS vs the heuristic AI
@@ -189,12 +270,13 @@
                 (partition 2 args))))
 
 (defn -main [& [cmd & args]]
-  (let [opts (parse-args args)]
+  (let [opts (set/rename-keys (parse-args args) {:sims :simulations})]
     (case cmd
-      "generate" (generate! (merge {:games 10 :simulations 200 :out "data/selfplay.jsonl"}
-                                   (set/rename-keys opts {:sims :simulations})))
-      "arena" (arena (merge {:games 20 :simulations 100}
-                            (set/rename-keys opts {:sims :simulations})))
-      (println "usage: clj -M:selfplay generate --games N --sims N [--threads N] --out FILE\n"
-               "      clj -M:selfplay arena --games N --sims N [--threads N]")))
+      "generate" (generate! (merge {:games 10 :simulations 200 :out "data/selfplay.jsonl"} opts))
+      "arena"    (arena (merge {:games 20 :simulations 100} opts))
+      "versus"   (versus (merge {:games 30 :simulations 100} opts))
+      (println (str "usage:\n"
+                    "  clj -M:selfplay generate --games N --sims N [--model M.onnx] [--threads N] --out FILE\n"
+                    "  clj -M:selfplay arena    --games N --sims N [--threads N]        (MCTS vs heuristic)\n"
+                    "  clj -M:selfplay versus   --challenger A.onnx [--champion B.onnx] --games N --sims N"))))
   (shutdown-agents))

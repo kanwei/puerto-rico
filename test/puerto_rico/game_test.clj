@@ -12,7 +12,12 @@
 (defn mk-players [n]
   (mapv #(state/new-player (inc %) (str "P" (inc %))) (range n)))
 
+;; Default game = all AI seats (matches self-play; selects the swept mayor path)
 (defn mk-game [n]
+  (state/new-game-state (mapv #(assoc % :is-ai true) (mk-players n))))
+
+;; Human game = no :is-ai (selects the keep-board interactive mayor path)
+(defn human-game [n]
   (state/new-game-state (mk-players n)))
 
 (defn set-player [game idx player-updates]
@@ -203,7 +208,30 @@
              (get-in (rules/execute-trader g2 2 :indigo) [:players 1 :money])))
       ;; At the end of the phase the full house is emptied back to the supply
       (let [g3 (rules/end-role-execution g2)]
-        (is (empty? (:trading-house g3)))))))
+        (is (empty? (:trading-house g3))))))
+  (testing "an office may sell a duplicate kind; a full house with a duplicate still clears"
+    (let [base (-> (mk-game 3)
+                   (assoc :trading-house [{:good :indigo :player-id 9}])
+                   (assoc :role-selector-idx 2))]
+      ;; without an office a duplicate is illegal
+      (is (not (rules/can-trade-good? base (get-in (set-player base 0 {:goods (goods {:indigo 1})})
+                                                   [:players 0]) :indigo)))
+      ;; with an occupied office it is allowed
+      (let [g (set-player base 0 {:goods (goods {:indigo 1})
+                                  :buildings [{:type :office :colonists 1}]})]
+        (is (rules/can-trade-good? g (get-in g [:players 0]) :indigo)))
+      ;; a full house that is full via a duplicate (3 kinds, 4 goods) must still clear
+      (let [g (-> (mk-game 3)
+                  (assoc :trading-house [{:good :sugar :player-id 9} {:good :coffee :player-id 9}
+                                         {:good :indigo :player-id 9} {:good :indigo :player-id 9}]
+                         :selected-role :trader :role-selector-idx 0
+                         :role-execution-order [0 1 2] :role-execution-current-idx 2
+                         :phase :role-execution :players-selected-this-round 1)
+                  (set-player 1 {:goods (goods {:corn 1})}))
+            supply-before (get-in g [:goods-supply :indigo])
+            g2 (rules/end-role-execution g)]
+        (is (empty? (:trading-house g2)))
+        (is (= (+ supply-before 2) (get-in g2 [:goods-supply :indigo])))))))
 
 ;; ================================================================================
 ;; Captain
@@ -444,6 +472,31 @@
           g2 (drive-role (rules/select-role g 1 :mayor))]
       (is (:colonist-ship-shortfall g2))
       (is (state/check-victory-conditions g2)))))
+
+(deftest mayor-human-keeps-board
+  (testing "a human's board is NOT swept; they place/remove new colonists by index"
+    (let [g (-> (human-game 3)
+                (set-player 0 {:plantations [{:type :corn :colonists 1}
+                                             {:type :indigo :colonists 0}]})
+                (assoc :colonist-ship 0 :colonist-supply 3))
+          g2 (rules/select-role g 1 :mayor)]      ;; P1 human, privilege = 1 from supply
+      ;; existing corn stays manned, new colonist is in hand, P1 must decide
+      (is (= 1 (:colonists (first (get-in g2 [:players 0 :plantations])))))
+      (is (= 1 (get-in g2 [:players 0 :colonists-in-hand])))
+      (is (= 0 (:role-execution-current-idx g2)))
+      ;; place on the empty indigo (index 1)
+      (let [g3 (rules/apply-move g2 {:type :role-action :role :mayor :player-id 1
+                                     :args [:place-at :plantation 1]})]
+        (is (= 1 (:colonists (second (get-in g3 [:players 0 :plantations])))))
+        (is (= 0 (get-in g3 [:players 0 :colonists-in-hand])))
+        ;; remove the corn colonist back to hand (rearrange)
+        (let [g4 (rules/apply-move g3 {:type :role-action :role :mayor :player-id 1
+                                       :args [:remove-at :plantation 0]})]
+          (is (= 0 (:colonists (first (get-in g4 [:players 0 :plantations])))))
+          (is (= 1 (get-in g4 [:players 0 :colonists-in-hand])))
+          ;; done is refused while a colonist can still be placed
+          (is (identical? g4 (rules/apply-move g4 {:type :role-action :role :mayor
+                                                   :player-id 1 :args []}))))))))
 
 ;; ================================================================================
 ;; Settler
