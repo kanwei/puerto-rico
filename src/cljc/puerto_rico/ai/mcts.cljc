@@ -118,7 +118,9 @@
 ;; Node: {:P {id prior} :N {id visits} :W {id value-sum-vector} :children {id node}}
 
 (defn- select-action-puct [node legal-ids mover c-puct]
-  (let [total-n (reduce + 0 (map #(get-in node [:N %] 0) legal-ids))
+  ;; total child visits is tracked on the node (:visits) - incremented once per
+  ;; descent - so we avoid re-summing every child's N on every node visit
+  (let [total-n (get node :visits 0)
         sqrt-n (Math/sqrt (+ 1.0 total-n))
         uniform (/ 1.0 (count legal-ids))]
     (apply max-key
@@ -156,6 +158,7 @@
           [value
            (-> node
                (assoc-in [:children id] child')
+               (update :visits (fnil inc 0))     ;; total child visits (for PUCT)
                (update-in [:N id] (fnil inc 0))
                (update-in [:W id] (fnil #(mapv + % value)
                                         (vec (repeat (count value) 0.0)))))])))))
@@ -221,6 +224,32 @@
             id
             (recur more acc)))))))
 
+(defn- q-value
+  "Mean value of an action for the given mover from the search root, or nil if
+   the action was never visited. This is the search's estimate for that branch."
+  [root id mover]
+  (let [n (get-in root [:N id] 0)]
+    (when (pos? n)
+      (/ (nth (get-in root [:W id]) mover) n))))
+
+(defn search-stats
+  "Compact, transport-friendly diagnostics for a finished search, from the
+   acting player's perspective. :value is the value estimate for the branch the
+   AI actually plays (chosen-id); :candidates lists the most-visited actions,
+   each with its policy :weight (visit share) and branch :q value."
+  [game-state {:keys [root visits]} chosen-id & [n-top]]
+  (let [mover  (actions/actor-index game-state)
+        total  (reduce + 0 (vals visits))
+        ranked (->> visits (filter (comp pos? val)) (sort-by val >))
+        candidates (mapv (fn [[id n]]
+                           {:move   (actions/action->move game-state id)
+                            :weight (if (pos? total) (/ (double n) total) 0.0)
+                            :q      (q-value root id mover)})
+                         (take (or n-top 4) ranked))]
+    {:sims       total
+     :value      (q-value root chosen-id mover)
+     :candidates candidates}))
+
 (defn ai-select-move
   "Drop-in AI interface: pick a move via MCTS and return it in the engine's
    move format. Returns nil when there is nothing to decide."
@@ -234,3 +263,19 @@
                      :visits
                      (sample-action (:temperature opts))))]
         (actions/action->move game-state id)))))
+
+(defn ai-decide
+  "Like `ai-select-move`, but also returns the search diagnostics so callers can
+   surface how confident the AI is: {:move <move> :stats <search-stats>}.
+   A forced move (single legal action) skips the search and carries no :stats.
+   Returns nil when there is nothing to decide."
+  [game-state player-id & [opts]]
+  (let [legal-ids (actions/legal-action-ids game-state)]
+    (when (and (seq legal-ids)
+               (= player-id (:id (actions/actor-player game-state))))
+      (if (= 1 (count legal-ids))
+        {:move (actions/action->move game-state (first legal-ids))}
+        (let [result (mcts-search game-state opts)
+              id     (sample-action (:visits result) (:temperature opts))]
+          {:move  (actions/action->move game-state id)
+           :stats (search-stats game-state result id)})))))

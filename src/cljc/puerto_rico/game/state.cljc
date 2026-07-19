@@ -314,6 +314,25 @@
                           0)]
     (+ guild-hall-bonus residence-bonus fortress-bonus customs-house-bonus city-hall-bonus)))
 
+(defn special-vp-for-building
+  "End-game bonus VP a large (violet) building is currently worth for this
+   player, computed from the present board state. Occupation is ignored so an
+   as-yet-unstaffed large building still shows the potential it would score.
+   Ordinary buildings return 0."
+  [player building-type]
+  (case building-type
+    :guild-hall    (let [{:keys [small large]} (count-production-buildings player)]
+                     (+ (* small 1) (* large 2)))
+    :residence     (let [filled (count-filled-island-spaces player)]
+                     (cond (>= filled 12) 7
+                           (>= filled 11) 6
+                           (>= filled 10) 5
+                           :else 4))
+    :fortress      (quot (count-total-colonists player) 3)
+    :customs-house (quot (:victory-points player) 4)
+    :city-hall     (count-violet-buildings player)
+    0))
+
 ;; Victory condition checks
 (defn check-victory-conditions
   "Game ends at the end of the round in which: a player fills all 12 city spaces,

@@ -8,12 +8,16 @@
      (mcts/mcts-search game-state {:evaluate (evaluator model)})"
   (:require [puerto-rico.ai.actions :as actions]
             [puerto-rico.ai.encoder :as encoder])
-  (:import (ai.onnxruntime OnnxTensor OrtEnvironment OrtSession$Result)))
+  (:import (ai.onnxruntime OnnxTensor OrtEnvironment OrtSession$Result TensorInfo)))
 
 (defn load-model [onnx-path]
-  (let [env (OrtEnvironment/getEnvironment)]
-    {:env env
-     :session (.createSession env ^String onnx-path)}))
+  (let [env (OrtEnvironment/getEnvironment)
+        session (.createSession env ^String onnx-path)
+        ;; the "state" input's fixed feature dimension (last axis; axis 0 is batch)
+        info ^TensorInfo (.getInfo (val (first (.getInputInfo session))))
+        shape (.getShape info)
+        input-dim (int (aget shape (dec (alength shape))))]
+    {:env env :session session :path onnx-path :input-dim input-dim}))
 
 (defn- masked-softmax
   "Softmax over the logits at legal-ids only; returns {id prob}"
@@ -53,21 +57,34 @@
    The value MCTS backs up is the UTILITY blend U = Vwin + c*margin, so the
    search keeps maximizing point margin even when the win/loss is decided.
    Everything is rotated from egocentric to absolute seat order for the tree."
-  [{:keys [env session]} & [{:keys [utility-c] :or {utility-c default-utility-c}}]]
+  [{:keys [env session input-dim path]} & [{:keys [utility-c] :or {utility-c default-utility-c}}]]
   (fn [game-state legal-ids]
-    (let [encoded (float-array (encoder/encode-state game-state))
-          input ^"[[F" (into-array [(float-array encoded)])]
-      (with-open [tensor (OnnxTensor/createTensor env input)
-                  ^OrtSession$Result result (.run session {"state" tensor})]
-        (let [outputs (into {} (map (fn [e] [(.getKey e) (.getValue e)]) result))
-              policy-logits (vec (first ^"[[F" (.getValue (outputs "policy_logits"))))
-              value-logits (vec (first ^"[[F" (.getValue (outputs "value_logits"))))
-              margins-ego (vec (first ^"[[F" (.getValue (outputs "score_margins"))))
-              win-ego (softmax value-logits)
-              n (count win-ego)
-              ;; blend: win probability plus the margin term (margins sum ~0,
-              ;; so utility still sums ~1 across seats)
-              utility-ego (mapv (fn [w m] (+ w (* utility-c m))) win-ego margins-ego)
-              actor (actions/actor-index game-state)]
-          {:priors (masked-softmax policy-logits legal-ids)
-           :value (rotate-ego->abs utility-ego actor n)})))))
+    (let [n-players (count (:players game-state))
+          state-vec (encoder/encode-state game-state)]
+      ;; A model's input width is fixed to the player count it was trained on
+      ;; (the egocentric encoding grows with players). Fail clearly instead of
+      ;; letting ONNX throw a cryptic "invalid dimensions for input: state".
+      (when (and input-dim (not= (count state-vec) input-dim))
+        (throw (ex-info (str "Model " (or path "?") " expects " input-dim
+                             " inputs but this " n-players "-player state encodes to "
+                             (count state-vec) ". A model only works for the player "
+                             "count it was trained on (and the encoder version). "
+                             "Use a matching " (cond (= input-dim 328) "3" (= input-dim 398) "4"
+                                                     (= input-dim 468) "5" :else "N")
+                             "-player game, or retrain for this player count.")
+                        {:input-dim input-dim :got (count state-vec) :players n-players})))
+      (let [input ^"[[F" (into-array [(float-array state-vec)])]
+        (with-open [tensor (OnnxTensor/createTensor env input)
+                    ^OrtSession$Result result (.run session {"state" tensor})]
+          (let [outputs (into {} (map (fn [e] [(.getKey e) (.getValue e)]) result))
+                policy-logits (vec (first ^"[[F" (.getValue (outputs "policy_logits"))))
+                value-logits (vec (first ^"[[F" (.getValue (outputs "value_logits"))))
+                margins-ego (vec (first ^"[[F" (.getValue (outputs "score_margins"))))
+                win-ego (softmax value-logits)
+                n (count win-ego)
+                ;; blend: win probability plus the margin term (margins sum ~0,
+                ;; so utility still sums ~1 across seats)
+                utility-ego (mapv (fn [w m] (+ w (* utility-c m))) win-ego margins-ego)
+                actor (actions/actor-index game-state)]
+            {:priors (masked-softmax policy-logits legal-ids)
+             :value (rotate-ego->abs utility-ego actor n)}))))))

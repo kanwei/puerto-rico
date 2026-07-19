@@ -46,10 +46,16 @@ def run(cmd, **kw):
 
 
 def run_capture(cmd):
+    """Run a command, echo its output, and return (stdout, returncode).
+    Does NOT raise on non-zero exit - callers decide (e.g. a versus run may
+    print its RESULT and still exit non-zero from a benign native shutdown)."""
     print(f"\n$ {' '.join(cmd)}", flush=True)
-    p = subprocess.run(cmd, cwd=ROOT, check=True, capture_output=True, text=True)
+    p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     sys.stdout.write(p.stdout)
-    return p.stdout
+    if p.returncode != 0:
+        # surface the real error instead of a bare CalledProcessError traceback
+        sys.stderr.write(p.stderr)
+    return p.stdout, p.returncode
 
 
 def self_play(gen, champion, games, sims, players):
@@ -78,14 +84,15 @@ def training_window(gen, window):
     return win
 
 
-def train(gen, resume, epochs, batch, width, blocks):
+def train(gen, resume, epochs, batch, width, blocks, device):
     data = training_window(gen, window=5)
     out = os.path.join(MODELS, f"gen{gen}")
     # use the same interpreter running this loop (i.e. the venv python)
     cmd = [sys.executable, os.path.join(ROOT, "train", "train.py"),
            "--data", data, "--out", out,
            "--epochs", str(epochs), "--batch", str(batch),
-           "--width", str(width), "--blocks", str(blocks)]
+           "--width", str(width), "--blocks", str(blocks),
+           "--device", device]
     if resume:
         cmd += ["--resume", resume]
     run(cmd)
@@ -99,9 +106,14 @@ def evaluate(challenger, champion, games, sims, players):
            "--players", str(players)]
     if champion:
         cmd += ["--champion", champion]
-    out = run_capture(cmd)
+    out, code = run_capture(cmd)
     m = re.search(r"^RESULT (.+)$", out, re.MULTILINE)
-    return json.loads(m.group(1)) if m else {"winrate": 0.0}
+    if m:
+        # trust a printed RESULT even if the JVM exited non-zero on shutdown
+        return json.loads(m.group(1))
+    raise RuntimeError(
+        f"evaluation produced no RESULT (clj exited {code}). See the error above "
+        f"- a common cause is a model/game player-count mismatch.")
 
 
 def main():
@@ -120,6 +132,8 @@ def main():
     ap.add_argument("--promote", type=float, default=None,
                     help="win-rate gate to become champion (default: baseline + 0.07)")
     ap.add_argument("--start-gen", type=int, default=1)
+    ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"],
+                    help="training device; 'cuda' also selects AMD ROCm")
     args = ap.parse_args()
 
     os.makedirs(DATA, exist_ok=True)
@@ -143,7 +157,7 @@ def main():
 
         self_play(gen, champion, args.games, args.sims, args.players)
         cand_onnx, cand_pt = train(gen, champion_pt, args.epochs,
-                                   args.batch, args.width, args.blocks)
+                                   args.batch, args.width, args.blocks, args.device)
         result = evaluate(cand_onnx, champion, args.eval_games,
                           args.eval_sims, args.players)
         winrate = result["winrate"]

@@ -10,9 +10,8 @@
 ;; Forward declarations for functions used before definition
 (declare handle-automatic-role-execution check-ai-turn!)
 
-;; Backend that computes AI moves with MCTS. When it is unreachable the game
-;; falls back to the local heuristic AI so it still works standalone.
-(def api-base "http://localhost:8080")
+;; AI moves are computed by the backend (MCTS) via same-origin API calls; when
+;; it is unreachable the game falls back to the local heuristic AI.
 (def mcts-simulations 200)
 
 ;; Simple game state atom for demo
@@ -40,7 +39,7 @@
                                             {:kind :mcts} {:kind :mcts}]}))
 
 (defn fetch-models! []
-  (-> (js/fetch (str api-base "/api/models"))
+  (-> (js/fetch "/api/models")
       (.then #(.text %))
       (.then #(reset! available-models (vec (:models (reader/read-string %)))))
       (.catch (fn [_] (reset! available-models [])))))
@@ -73,7 +72,7 @@
   ;; :prospector-2 is the second prospector placard in 5-player games
   (str/replace (name role) #"-2$" ""))
 
-(defn add-log-entry [message & [player-name]]
+(defn add-log-entry [message & [player-name stats]]
   (let [current-game (:game-state @game-state)
         round-num (:round current-game 1)
         current-player-idx (:current-player-idx current-game)
@@ -84,6 +83,7 @@
         entry {:turn                turn-label
                :message             message
                :player              player-name
+               :stats               stats                    ; AI search diagnostics (nil for humans)
                :game-state-snapshot current-game            ; Store the game state before this move
                :timestamp           (.getTime (js/Date.))}]
     (swap! game-log conj entry)))
@@ -464,7 +464,7 @@
 (defn- apply-ai-move!
   "Apply an AI move that was decided for the state game-data. Drops it if the
    game moved on (stale), logs + animates otherwise."
-  [game-data ai-player move label]
+  [game-data ai-player move label & [stats]]
   (let [current (:game-state @game-state)]
     (cond
       (not= current game-data)
@@ -473,7 +473,7 @@
 
       (and move (rules/valid-move? current (:player-id move) move))
       (let [description (str (describe-move current move) label)]
-        (add-log-entry description (:name ai-player))
+        (add-log-entry description (:name ai-player) stats)
         (reset! ai-action-display {:show true :player (:name ai-player) :action description})
         (reagent/flush)                     ;; RAF batching can be throttled; flush
         (js/setTimeout
@@ -488,9 +488,10 @@
 
 (defn- fetch-backend-move
   "POST the game state (and optional model) to the backend; calls back with the
-   MCTS move, or nil on failure so the caller can fall back to the heuristic."
+   parsed {:move .. :stats ..} decision, or nil on failure so the caller can
+   fall back to the heuristic."
   [game-data model callback]
-  (-> (js/fetch (str api-base "/api/ai-move")
+  (-> (js/fetch "/api/ai-move"
                 (clj->js {:method "POST"
                           :headers {"Content-Type" "application/edn"}
                           :body (pr-str (cond-> {:game-state game-data
@@ -500,7 +501,7 @@
                (if (.-ok resp)
                  (.text resp)
                  (throw (js/Error. (str "HTTP " (.-status resp)))))))
-      (.then (fn [text] (callback (:move (reader/read-string text)))))
+      (.then (fn [text] (callback (reader/read-string text))))
       (.catch (fn [err]
                 (js/console.warn "Backend AI unavailable, using local heuristic:" err)
                 (callback nil)))))
@@ -525,10 +526,12 @@
         ;; backend MCTS (rollouts when :model is nil) or NN model
         (fetch-backend-move
          game-data (:model ctrl)
-         (fn [backend-move]
-           (apply-ai-move! game-data ai-player
-                           (or backend-move (heuristic-fallback-move game-data))
-                           (if backend-move "" " (local)"))))))))
+         (fn [decision]
+           (let [backend-move (:move decision)]
+             (apply-ai-move! game-data ai-player
+                             (or backend-move (heuristic-fallback-move game-data))
+                             (if backend-move "" " (local)")
+                             (:stats decision)))))))))
 
 (defn ai-turn-needed? [game-data]
   (boolean
@@ -564,6 +567,17 @@
 
 (defn titlecase [s]
   (str/join " " (map str/capitalize (str/split (str/replace (name s) "-" " ") #" "))))
+
+(defn building-description
+  "Hover text for a building. Uses the rulebook description when present, and
+   synthesizes a short one for plain production buildings (which carry none)."
+  [building-type]
+  (let [info (get state/buildings building-type)]
+    (or (:description info)
+        (when-let [g (:good info)]
+          (str "Production building — makes 1 " (name g)
+               " in the craftsman phase for each colonist working it."))
+        "")))
 
 (defn dot [good]
   [:span.dot {:style {:background-color (get good-color good "#8f8b84")}}])
@@ -929,7 +943,8 @@
       [:div.player-badges
        [:span.stat-badge.money {:title "Doubloons"} (str "$" (:money player))]
        [:span.stat-badge.vp {:title "Victory points"} (:victory-points player) " VP"]
-       [:span.stat-badge {:title "Buildings"} (count (:buildings player)) " bldg"]
+       [:span.stat-badge {:title "City slots used (large buildings take 2 of 12)"}
+        (state/city-slots-used player) "/12"]
        (when (pos? san-juan)
          [:span.stat-badge {:title "Colonists in San Juan"} san-juan " SJ"])]]
 
@@ -950,11 +965,20 @@
         [:div.section-label "Buildings"]
         [:div.tile-list
          (for [[idx b] (map-indexed vector (:buildings player))]
-           (let [cap (get-building-capacity (:type b))]
+           (let [cap (get-building-capacity (:type b))
+                 vp (get-in state/buildings [(:type b) :vp] 0)
+                 special (state/special-vp-for-building player (:type b))]
              ^{:key idx}
-             [:div.tile-row
+             [:div.tile-row.has-tip {:data-tip (building-description (:type b))}
               [:span.tile-name (titlecase (:type b))]
-              [worker-pips (:colonists b 0) cap]]))]])
+              [:span.tile-row-right
+               (when (pos? vp)
+                 [:span.vp-badge {:title "Victory points from this building"} vp " VP"])
+               (when (pos? special)
+                 [:span.special-badge
+                  {:title "End-game bonus VP this building is worth at the current board state"}
+                  "✦ +" special])
+               [worker-pips (:colonists b 0) cap]]]))]])
 
      (when (seq goods)
        [:div.card-section
@@ -962,6 +986,22 @@
         [:div.good-tags
          (for [[good amount] (sort-by #(get rules/good-values (first %) 99) goods)]
            ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count amount]])]])]))
+
+(defn- fmt-pct [x] (str (js/Math.round (* 100 x)) "%"))
+(defn- fmt-val [x] (when (number? x) (.toFixed x 2)))
+
+(defn ai-stats-text
+  "Compact one-line diagnostics of an AI decision's MCTS search: the value
+   estimate for the line played, the simulation count, and the top candidate
+   moves with their visit-share weight. game-data is the state before the move."
+  [game-data {:keys [value sims candidates]}]
+  (->> (concat
+        (when value [(str "v " (fmt-val value))])
+        (when sims [(str sims " sims")])
+        (map (fn [c] (str (describe-move game-data (:move c)) " " (fmt-pct (:weight c))))
+             (take 3 candidates)))
+       (remove nil?)
+       (str/join "  ·  ")))
 
 (defn game-log-ui []
   [:div.game-log
@@ -984,7 +1024,10 @@
           [:span.turn-number (:turn entry)]
           (when (:player entry)
             [:span.player (:player entry) ":"])
-          [:span.message (:message entry)]]))
+          [:span.message (:message entry)]
+          (when (:stats entry)
+            [:span.log-stats {:title "AI search: value estimate · simulations · top moves by visit share"}
+             (ai-stats-text (:game-state-snapshot entry) (:stats entry))])]))
       [:div.log-empty "No events yet..."])]])
 
 (defn game-over-main-pane [game-data]

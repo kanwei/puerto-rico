@@ -33,10 +33,13 @@
 (def game-sessions (atom {}))
 
 ;; Handler functions
-(defn root-handler [_request]
-  {:status 200
-   :headers {"content-type" "text/plain"}
-   :body "Puerto Rico Game Server"})
+(defn index-handler
+  "Serve the SPA's index.html so the whole app runs from this one server."
+  [_request]
+  (if-let [r (io/resource "public/index.html")]
+    {:status 200 :headers {"content-type" "text/html; charset=utf-8"} :body (slurp r)}
+    {:status 503 :headers {"content-type" "text/plain"}
+     :body "UI not built. Run `bb build-ui` (shadow-cljs release app) first."}))
 
 (defn create-game-handler [_request]
   (let [game-id (str (java.util.UUID/randomUUID))
@@ -103,12 +106,12 @@
     (let [{:keys [game-state simulations model]} (edn/read-string (slurp (:body request)))
           player-id (:id (actions/actor-player game-state))
           evaluate (selfplay/evaluator-for (when model (str models-dir "/" model)))
-          move (mcts/ai-select-move game-state player-id
-                                    {:simulations (or simulations 200)
-                                     :evaluate evaluate})]
+          decision (mcts/ai-decide game-state player-id
+                                   {:simulations (or simulations 200)
+                                    :evaluate evaluate})]
       {:status 200
        :headers {"content-type" "application/edn"}
-       :body (pr-str {:move move})})
+       :body (pr-str (select-keys decision [:move :stats]))})
     (catch Exception e
       {:status 400
        :headers {"content-type" "application/edn"}
@@ -116,7 +119,7 @@
 
 ;; Route definitions
 (def routes
-  [["/" {:get root-handler}]
+  [["/" {:get index-handler}]
    ["/api"
     ["/ai-move" {:post ai-move-handler}]
     ["/models" {:get models-handler}]

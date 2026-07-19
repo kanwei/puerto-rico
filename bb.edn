@@ -1,8 +1,28 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}}
  :tasks
- {:require [[clojure.string :as str]]
+ {:requires ([babashka.fs :as fs]
+             [clojure.string :as str])
+  :init
+  (do
+    (defn- venv-bin
+      "Absolute path to an executable inside train/.venv (OS-aware)."
+      [exe]
+      (let [win? (str/includes? (str/lower-case (System/getProperty "os.name")) "win")
+            p (if win?
+                (str "train/.venv/Scripts/" exe ".exe")
+                (str "train/.venv/bin/" exe))]
+        (str (fs/absolutize p))))
+    (defn- venv-python
+      "venv python path, erroring out if the venv hasn't been created yet."
+      []
+      (let [p (venv-bin "python")]
+        (when-not (fs/exists? p)
+          (println "No Python venv found. Run `bb venv` first (see train/README.md).")
+          (System/exit 1))
+        p)))
 
+  ;; ---- tests / CI --------------------------------------------------------
   test {:doc "Run the test suite."
         :task (clojure "-M:test" "-m" "cognitect.test-runner")}
 
@@ -15,5 +35,47 @@
             :depends [test test:bb]}
 
   ci {:doc "Run the CI pipeline of tests and build the JAR."
-      :depends [test:all] ; or just test
-      :task (clojure "-T:build" "uber")}}}
+      :depends [test:all]
+      :task (clojure "-T:build" "uber")}
+
+  ;; ---- single-server hosting --------------------------------------------
+  build-ui {:doc "Compile the optimized frontend to resources/public/js (run before serve)."
+            :task (clojure "-M:shadow-cljs" "release" "app")}
+
+  serve {:doc "Serve the app AND the AI API on one port (default 8080). e.g. bb serve 8080"
+         :task (do
+                 (when-not (fs/exists? "resources/public/js/main.js")
+                   (println "Frontend not built yet - running `bb build-ui` ...")
+                   (clojure "-M:shadow-cljs" "release" "app"))
+                 (apply clojure "-M:run-m" *command-line-args*))}
+
+  ;; ---- AlphaZero training pipeline --------------------------------------
+  venv {:doc "One-time: create train/.venv and install the Python training deps."
+        :task (do
+                (when-not (fs/exists? "train/.venv")
+                  (println "Creating train/.venv ...")
+                  (shell "python3" "-m" "venv" "train/.venv"))
+                (let [pip (venv-bin "pip")]
+                  (shell pip "install" "--upgrade" "pip")
+                  (shell pip "install" "-r" "train/requirements.txt"))
+                (println "\nPyTorch / device check:")
+                (shell (venv-bin "python") "-c"
+                       (str "import torch;"
+                            "print('torch', torch.__version__);"
+                            "print('cuda available:', torch.cuda.is_available());"
+                            "print('mps available:', getattr(torch.backends,'mps',None) and torch.backends.mps.is_available())")))}
+
+  selfplay {:doc "Generate self-play data (JVM, all cores). e.g. bb selfplay --games 200 --sims 200 --out data/gen1.jsonl"
+            :task (apply clojure "-M:selfplay" "generate" *command-line-args*)}
+
+  arena {:doc "Play MCTS vs the heuristic AI. e.g. bb arena --games 20 --sims 150"
+         :task (apply clojure "-M:selfplay" "arena" *command-line-args*)}
+
+  versus {:doc "Head-to-head: bb versus --challenger models/gen3.onnx --champion models/gen2.onnx --games 40"
+          :task (apply clojure "-M:selfplay" "versus" *command-line-args*)}
+
+  train {:doc "Train one network in the venv. e.g. bb train --data data/gen1.jsonl --out models/gen1 --epochs 3"
+         :task (apply shell (venv-python) "train/train.py" *command-line-args*)}
+
+  loop {:doc "Run the full generational self-training loop. e.g. bb loop --generations 8 --games 500 --sims 200"
+        :task (apply shell (venv-python) "train/loop.py" *command-line-args*)}}}

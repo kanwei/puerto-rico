@@ -30,10 +30,13 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 
-def pick_device() -> torch.device:
+def pick_device(pref: str = "auto") -> torch.device:
+    # "cuda" also covers AMD ROCm builds of torch (they present as cuda/HIP).
+    if pref != "auto":
+        return torch.device(pref)
     if torch.cuda.is_available():
         return torch.device("cuda")
-    if torch.backends.mps.is_available():
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
 
@@ -108,9 +111,11 @@ def main():
     ap.add_argument("--score-weight", type=float, default=0.5,
                     help="weight of the auxiliary score-margin MSE loss")
     ap.add_argument("--resume", help="checkpoint (.pt) to continue from")
+    ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"],
+                    help="'cuda' also selects AMD ROCm; 'auto' picks cuda/mps/cpu")
     args = ap.parse_args()
 
-    device = pick_device()
+    device = pick_device(args.device)
     states, policies, values, margins = load_data(args.data)
     in_dim, n_actions, n_players = states.shape[1], policies.shape[1], values.shape[1]
     print(f"device={device}  examples={len(states)}  "
