@@ -27,6 +27,48 @@
 ;; Game log state
 (defonce game-log (reagent/atom []))
 
+;; --------------------------------------------------------------------------
+;; Game setup: player count (3-5) and a controller per seat
+;; --------------------------------------------------------------------------
+
+(def player-names ["Alice" "Bob" "Carol" "Dave" "Erin"])
+
+;; controller kinds: :human, :heuristic, :mcts (rollout), :model (NN)
+(defonce available-models (reagent/atom []))        ;; ["gen1.onnx" ...]
+(defonce setup (reagent/atom {:num-players 3
+                              :controllers [{:kind :human} {:kind :mcts} {:kind :mcts}
+                                            {:kind :mcts} {:kind :mcts}]}))
+
+(defn fetch-models! []
+  (-> (js/fetch (str api-base "/api/models"))
+      (.then #(.text %))
+      (.then #(reset! available-models (vec (:models (reader/read-string %)))))
+      (.catch (fn [_] (reset! available-models [])))))
+
+(defn controller-label [c]
+  (case (:kind c)
+    :human "Human"
+    :heuristic "Heuristic"
+    :mcts "MCTS"
+    :model (str/replace (:model c) #"\.onnx$" "")
+    "AI"))
+
+(defn controller->value [c]
+  (case (:kind c)
+    :human "human"
+    :heuristic "heuristic"
+    :mcts "mcts"
+    :model (str "model:" (:model c))
+    "mcts"))
+
+(defn value->controller [v]
+  (cond
+    (= v "human") {:kind :human}
+    (= v "heuristic") {:kind :heuristic}
+    (= v "mcts") {:kind :mcts}
+    (str/starts-with? v "model:") {:kind :model :model (subs v 6)}
+    :else {:kind :mcts}))
+
 (defn role-display-name [role]
   ;; :prospector-2 is the second prospector placard in 5-player games
   (str/replace (name role) #"-2$" ""))
@@ -74,23 +116,24 @@
 (defn clear-log []
   (reset! game-log []))
 
-;; Initialize a real game with players
-;; (AI players are driven by backend MCTS - no personalities anymore)
-(defn create-new-game []
+;; Build a game from the setup config: one controller per seat. Each player
+;; carries :is-ai (for the engine's mayor path + AI-turn detection) and
+;; :controller (for routing the move to the right bot/model).
+(defn create-configured-game [num-players controllers]
   (clear-log)
-  (let [players [(state/new-player 1 "Alice (Human)")
-                 (assoc (state/new-player 2 "Bob") :is-ai true)
-                 (assoc (state/new-player 3 "Carol") :is-ai true)]]
-    (add-log-entry "New game started with 3 players")
+  (let [players (mapv (fn [i c]
+                        (-> (state/new-player (inc i) (nth player-names i))
+                            (assoc :is-ai (not= (:kind c) :human)
+                                   :controller c)))
+                      (range num-players)
+                      controllers)]
+    (add-log-entry (str "New game — " num-players " players"))
     (state/new-game-state players)))
 
-(defn create-ai-only-game []
-  (clear-log)
-  (let [players [(assoc (state/new-player 1 "Alice") :is-ai true)
-                 (assoc (state/new-player 2 "Bob") :is-ai true)
-                 (assoc (state/new-player 3 "Carol") :is-ai true)]]
-    (add-log-entry "New AI-only game started with 3 players")
-    (state/new-game-state players)))
+(defn start-configured-game! []
+  (let [{:keys [num-players controllers]} @setup]
+    (swap! game-state assoc :game-state
+           (create-configured-game num-players (take num-players controllers)))))
 
 ;; Helper functions
 (defn current-player [game-data]
@@ -418,14 +461,41 @@
                 (current-player game-data))]
     (ai/ai-select-move game-data (:id actor))))
 
+(defn- apply-ai-move!
+  "Apply an AI move that was decided for the state game-data. Drops it if the
+   game moved on (stale), logs + animates otherwise."
+  [game-data ai-player move label]
+  (let [current (:game-state @game-state)]
+    (cond
+      (not= current game-data)
+      (do (reset! ai-action-display {:show false :player "" :action ""})
+          (js/setTimeout check-ai-turn! 50))
+
+      (and move (rules/valid-move? current (:player-id move) move))
+      (let [description (str (describe-move current move) label)]
+        (add-log-entry description (:name ai-player))
+        (reset! ai-action-display {:show true :player (:name ai-player) :action description})
+        (reagent/flush)                     ;; RAF batching can be throttled; flush
+        (js/setTimeout
+         #(do (reset! ai-action-display {:show false :player "" :action ""})
+              (swap! game-state assoc :game-state (rules/apply-move current move))
+              (reagent/flush))
+         150))
+
+      :else
+      (do (js/console.error "AI produced no valid move:" (pr-str move))
+          (reset! ai-action-display {:show false :player "" :action ""})))))
+
 (defn- fetch-backend-move
-  "POST the game state to the backend; calls back with the MCTS move or nil"
-  [game-data callback]
+  "POST the game state (and optional model) to the backend; calls back with the
+   MCTS move, or nil on failure so the caller can fall back to the heuristic."
+  [game-data model callback]
   (-> (js/fetch (str api-base "/api/ai-move")
                 (clj->js {:method "POST"
                           :headers {"Content-Type" "application/edn"}
-                          :body (pr-str {:game-state game-data
-                                         :simulations mcts-simulations})}))
+                          :body (pr-str (cond-> {:game-state game-data
+                                                 :simulations mcts-simulations}
+                                          model (assoc :model model)))}))
       (.then (fn [resp]
                (if (.-ok resp)
                  (.text resp)
@@ -436,44 +506,29 @@
                 (callback nil)))))
 
 (defn execute-ai-turn-async
-  "One AI decision: ask the backend for an MCTS move (heuristic fallback),
-   then apply it through the engine"
+  "One AI decision, routed by the acting player's controller: a heuristic bot
+   is computed locally; an MCTS/model bot asks the backend (with the chosen
+   model), falling back to the heuristic if the backend is down."
   [game-data]
   (let [ai-player (if (= (:phase game-data) :role-execution)
                     (current-role-executor game-data)
-                    (when (:is-ai (current-player game-data)) (current-player game-data)))]
+                    (when (:is-ai (current-player game-data)) (current-player game-data)))
+        ctrl (:controller ai-player)]
     (when ai-player
-      ;; guard against re-entry while the request is in flight
       (reset! ai-action-display {:show true :player (:name ai-player)
-                                 :action "🤖 Thinking (MCTS)..."})
+                                 :action (str "🤖 Thinking (" (controller-label ctrl) ")…")})
       (reagent/flush)
-      (fetch-backend-move
-       game-data
-       (fn [backend-move]
-         (let [current (:game-state @game-state)]
-           (if (not= current game-data)
-             ;; the game moved on while we were thinking - drop the stale move
-             ;; and re-kick the driver (its watch already fired and was skipped)
-             (do (reset! ai-action-display {:show false :player "" :action ""})
-                 (js/setTimeout check-ai-turn! 50))
-             (let [move (or backend-move (heuristic-fallback-move game-data))]
-               (if (and move (rules/valid-move? current (:player-id move) move))
-                 (let [description (str (describe-move current move)
-                                        (when-not backend-move " (local)"))]
-                   (add-log-entry description (:name ai-player))
-                   (reset! ai-action-display {:show true :player (:name ai-player)
-                                              :action description})
-                   ;; reagent batches re-renders on requestAnimationFrame, which
-                   ;; may be throttled outside user events - flush explicitly
-                   (reagent/flush)
-                   (js/setTimeout
-                    #(do (reset! ai-action-display {:show false :player "" :action ""})
-                         (swap! game-state assoc :game-state (rules/apply-move current move))
-                         (reagent/flush))
-                    150))
-                 (do
-                   (js/console.error "AI produced no valid move:" (pr-str move))
-                   (reset! ai-action-display {:show false :player "" :action ""})))))))))))
+      (if (= (:kind ctrl) :heuristic)
+        ;; local heuristic - no backend round-trip
+        (js/setTimeout #(apply-ai-move! game-data ai-player
+                                        (heuristic-fallback-move game-data) "") 10)
+        ;; backend MCTS (rollouts when :model is nil) or NN model
+        (fetch-backend-move
+         game-data (:model ctrl)
+         (fn [backend-move]
+           (apply-ai-move! game-data ai-player
+                           (or backend-move (heuristic-fallback-move game-data))
+                           (if backend-move "" " (local)"))))))))
 
 (defn ai-turn-needed? [game-data]
   (boolean
@@ -867,24 +922,28 @@
       [:span.player-name (:name player)]
       [:span.badge {:class (if me? "badge-you" "badge-ai")}
        (cond (and current? me?) "You · to act"
-             current? "to act"
              me? "You"
-             :else "AI")]]
-     [:div.player-stats
-      [:div.pstat [:span.pstat-label "Doubloons"] [:span.pstat-value (str "$" (:money player))]]
-      [:div.pstat [:span.pstat-label "Victory"] [:span.pstat-value (:victory-points player)]]
-      [:div.pstat [:span.pstat-label "Buildings"] [:span.pstat-value (count (:buildings player))]]]
+             ;; bots show their controller (model name / MCTS / heuristic)
+             :else (str (controller-label (:controller player))
+                        (when current? " · to act")))]
+      [:div.player-badges
+       [:span.stat-badge.money {:title "Doubloons"} (str "$" (:money player))]
+       [:span.stat-badge.vp {:title "Victory points"} (:victory-points player) " VP"]
+       [:span.stat-badge {:title "Buildings"} (count (:buildings player)) " bldg"]
+       (when (pos? san-juan)
+         [:span.stat-badge {:title "Colonists in San Juan"} san-juan " SJ"])]]
 
      (when (seq (:plantations player))
        [:div.card-section
         [:div.section-label "Plantations"]
         [:div.tile-list
-         (for [[idx p] (map-indexed vector (:plantations player))]
-           ^{:key idx}
+         ;; one row per plantation TYPE, with a worked/total worker pip each
+         (for [[ptype tiles] (sort-by #(get rules/good-values (first %) 99)
+                                      (group-by :type (:plantations player)))]
+           ^{:key ptype}
            [:div.tile-row
-            [dot (:type p)]
-            [:span.tile-name (name (:type p))]
-            [:span.tile-status (if (pos? (:colonists p 0)) "worked" "vacant")]])]])
+            [:span.tile-name (name ptype)]
+            [worker-pips (count (filter #(pos? (:colonists % 0)) tiles)) (count tiles)]])]])
 
      (when (seq (:buildings player))
        [:div.card-section
@@ -894,7 +953,6 @@
            (let [cap (get-building-capacity (:type b))]
              ^{:key idx}
              [:div.tile-row
-              [:span.dot.dot-building]
               [:span.tile-name (titlecase (:type b))]
               [worker-pips (:colonists b 0) cap]]))]])
 
@@ -902,13 +960,8 @@
        [:div.card-section
         [:div.section-label "Goods"]
         [:div.good-tags
-         (for [[good amount] goods]
-           ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count amount]])]])
-
-     (when (pos? san-juan)
-       [:div.card-section
-        [:div.section-label "San Juan"]
-        [:span.muted (str san-juan " colonist" (when (> san-juan 1) "s"))]])]))
+         (for [[good amount] (sort-by #(get rules/good-values (first %) 99) goods)]
+           ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count amount]])]])]))
 
 (defn game-log-ui []
   [:div.game-log
@@ -975,10 +1028,49 @@
            [:td.total-points (get-in player [:vp-breakdown :total-vps])]])]]]
 
      [:div.game-over-actions
-      [:button.new-game {:on-click #(swap! game-state assoc :game-state (create-new-game))}
-       "New Game"]
-      [:button.ai-game {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
-       "AI vs AI"]]]))
+      [:button.new-game {:on-click #(swap! game-state assoc :game-state (create-configured-game
+                                                                         (:num-players @setup)
+                                                                         (take (:num-players @setup) (:controllers @setup))))}
+       "Rematch"]
+      [:button.ai-game {:on-click #(swap! game-state assoc :game-state nil)}
+       "New setup"]]]))
+
+(defn setup-screen []
+  (let [{:keys [num-players controllers]} @setup
+        models @available-models
+        options (concat [["Human" "human"] ["Heuristic" "heuristic"] ["MCTS (rollouts)" "mcts"]]
+                        (map (fn [m] [(str/replace m #"\.onnx$" "") (str "model:" m)]) models))]
+    [:div.start-screen
+     [:div.start-card
+      [:h1.game-title "Puerto Rico"]
+      [:p.start-tagline "Set up a game — choose the number of players and who controls each seat."]
+
+      [:div.setup-row
+       [:span.setup-label "Players"]
+       [:div.count-toggle
+        (for [n [3 4 5]]
+          ^{:key n}
+          [:button.count-btn {:class (when (= n num-players) "active")
+                              :on-click #(swap! setup assoc :num-players n)}
+           n])]]
+
+      [:div.setup-seats
+       (for [i (range num-players)]
+         ^{:key i}
+         [:div.setup-seat
+          [:span.seat-name (nth player-names i)]
+          [:select.seat-select
+           {:value (controller->value (nth controllers i))
+            :on-change #(swap! setup assoc-in [:controllers i]
+                               (value->controller (.. % -target -value)))}
+           (for [[label val] options]
+             ^{:key val} [:option {:value val} label])]])]
+
+      (when (empty? models)
+        [:p.setup-note "No trained models found — bots use rollout MCTS or the heuristic. Train one with train/loop.py to battle networks."])
+
+      [:button.start-button.primary {:on-click start-configured-game!}
+       [:span.start-button-title "Start game"]]]]))
 
 (defn game-board []
   (let [display-state (get-display-game-state)
@@ -1042,11 +1134,7 @@
                                     " · discard " (count (:plantation-discard game-data)))]]]]
 
           [:div.header-supply
-           [:div.supply-block
-            [:span.stat-label "Goods in supply"]
-            [:div.good-tags
-             (for [[good n] (sort-by (comp name first) (:goods-supply game-data))]
-               ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count n]])]]
+           ;; left: cargo ships + trading house
            [:div.supply-block
             [:span.stat-label "Cargo ships"]
             [:div.chip-row
@@ -1062,7 +1150,13 @@
               [:div.chip-row
                (for [[idx item] (map-indexed vector (:trading-house game-data))]
                  (let [g (if (map? item) (:good item) item)]
-                   ^{:key idx} [:span.chip [dot g] (name g)]))]])]]
+                   ^{:key idx} [:span.chip [dot g] (name g)]))]])
+           ;; right: goods in supply
+           [:div.supply-block.supply-goods
+            [:span.stat-label "Goods in supply"]
+            [:div.good-tags
+             (for [[good n] (sort-by #(get rules/good-values (first %) 99) (:goods-supply game-data))]
+               ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count n]])]]]]
 
          ;; Players (highlight the player who must actually act now)
          (let [acting-idx (if (= (:phase game-data) :role-execution)
@@ -1125,19 +1219,9 @@
          [:div.log-panel
           [game-log-ui]]])
 
-      ;; No game started
+      ;; No game started - setup screen
       :else
-      [:div.start-screen
-       [:div.start-card
-        [:h1.game-title "Puerto Rico"]
-        [:p.start-tagline "A colonial economy in miniature — race for victory points against the AI."]
-        [:div.start-actions
-         [:button.start-button {:on-click #(swap! game-state assoc :game-state (create-new-game))}
-          [:span.start-button-title "Play as human"]
-          [:span.start-button-desc "Take a seat against two AI opponents"]]
-         [:button.start-button.secondary {:on-click #(swap! game-state assoc :game-state (create-ai-only-game))}
-          [:span.start-button-title "Watch AI battle"]
-          [:span.start-button-desc "Three MCTS players compete"]]]]])))
+      [setup-screen])))
 
 (defn main-panel []
   [game-board])
@@ -1150,6 +1234,7 @@
   "Initialize the application"
   []
   (js/console.log "Initializing Puerto Rico application...")
+  (fetch-models!)                       ;; populate bot/model dropdowns
   (rdc/render @app-root [main-panel]))
 
 (defn test-nrepl-connection

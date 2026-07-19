@@ -30,11 +30,30 @@
         total (reduce + exps)]
     (mapv #(/ % total) exps)))
 
+(def default-utility-c
+  "Weight of the score-margin term in the MCTS utility blend U = Vwin + c*margin.
+   The network's margin output is already in tens-of-points, so a small c keeps
+   the win term dominant while still favoring bigger point leads among branches
+   of equal win probability (sharp endgames, underdog clawback)."
+  0.05)
+
+(defn- rotate-ego->abs
+  "Map an egocentric per-seat vector (index 0 = actor) back to absolute seats"
+  [ego actor n]
+  (reduce (fn [v k] (assoc v (mod (+ actor k) n) (nth ego k)))
+          (vec (repeat n 0.0))
+          (range n)))
+
 (defn evaluator
-  "MCTS evaluator backed by an ONNX network. The network sees the state and
-   predicts values egocentrically (index 0 = the acting player); MCTS wants
-   absolute seat order, so the value vector is rotated back."
-  [{:keys [env session]}]
+  "MCTS evaluator backed by an ONNX network. Predicts, egocentrically (index
+   0 = the acting player):
+     - policy priors over the action space
+     - win probability per seat (value head)
+     - score margin per seat (score-margin head, in tens of points)
+   The value MCTS backs up is the UTILITY blend U = Vwin + c*margin, so the
+   search keeps maximizing point margin even when the win/loss is decided.
+   Everything is rotated from egocentric to absolute seat order for the tree."
+  [{:keys [env session]} & [{:keys [utility-c] :or {utility-c default-utility-c}}]]
   (fn [game-state legal-ids]
     (let [encoded (float-array (encoder/encode-state game-state))
           input ^"[[F" (into-array [(float-array encoded)])]
@@ -43,13 +62,12 @@
         (let [outputs (into {} (map (fn [e] [(.getKey e) (.getValue e)]) result))
               policy-logits (vec (first ^"[[F" (.getValue (outputs "policy_logits"))))
               value-logits (vec (first ^"[[F" (.getValue (outputs "value_logits"))))
-              value-ego (softmax value-logits)
-              n (count value-ego)
-              actor (actions/actor-index game-state)
-              ;; egocentric -> absolute seats: abs[(actor+k) mod n] = ego[k]
-              value-abs (reduce (fn [v k]
-                                  (assoc v (mod (+ actor k) n) (nth value-ego k)))
-                                (vec (repeat n 0.0))
-                                (range n))]
+              margins-ego (vec (first ^"[[F" (.getValue (outputs "score_margins"))))
+              win-ego (softmax value-logits)
+              n (count win-ego)
+              ;; blend: win probability plus the margin term (margins sum ~0,
+              ;; so utility still sums ~1 across seats)
+              utility-ego (mapv (fn [w m] (+ w (* utility-c m))) win-ego margins-ego)
+              actor (actions/actor-index game-state)]
           {:priors (masked-softmax policy-logits legal-ids)
-           :value value-abs})))))
+           :value (rotate-ego->abs utility-ego actor n)})))))

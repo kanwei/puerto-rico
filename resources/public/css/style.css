@@ -174,7 +174,9 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
   flex-wrap: wrap;
 }
 .supply-block { display: flex; flex-direction: column; gap: 8px; }
-.supply-block:first-child { flex: 1; min-width: 280px; }
+/* goods-in-supply sits on the right; cargo ships + trading house on the left */
+.supply-goods { margin-left: auto; align-items: flex-end; }
+.supply-goods .good-tags { justify-content: flex-end; }
 
 /* ---- players -------------------------------------------------------------- */
 
@@ -200,8 +202,8 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
   box-shadow: 0 0 0 1px var(--sage);
 }
 
-.player-card-head { display: flex; align-items: center; gap: 10px; }
-.player-name { font-family: var(--serif); font-size: 20px; font-weight: 600; }
+.player-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.player-name { font-family: var(--serif); font-size: 19px; font-weight: 600; }
 .badge {
   font-size: 11px;
   font-weight: 700;
@@ -213,15 +215,20 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
 .badge-ai { background: #eceae2; color: var(--muted); }
 .badge-you { background: var(--sage-tint); color: var(--sage-deep); }
 
-.player-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+/* compact stat badges pushed to the right of the player name */
+.player-badges { margin-left: auto; display: flex; gap: 5px; align-items: center; }
+.stat-badge {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #efece3;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.pstat { display: flex; flex-direction: column; gap: 3px; }
-.pstat-value { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-badge.money { background: #f4eccb; color: #7c651a; }
+.stat-badge.vp { background: #f0e2df; color: var(--rust); }
 
 .card-section { display: flex; flex-direction: column; gap: 6px; }
 .tile-list { display: flex; flex-direction: column; gap: 4px; }
@@ -540,8 +547,40 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .start-button:hover { border-color: var(--sage); background: var(--sage-tint-2); }
+.start-button.primary { align-items: center; text-align: center; border-color: var(--sage); background: var(--sage-tint); margin-top: 20px; cursor: pointer; }
+.start-button.primary:hover { background: var(--sage); }
+.start-button.primary:hover .start-button-title { color: #fff; }
 .start-button-title { font-family: var(--serif); font-size: 18px; font-weight: 600; }
 .start-button-desc { color: var(--muted); font-size: 13px; }
+
+/* game setup */
+.setup-row { display: flex; align-items: center; gap: 16px; margin: 8px 0 20px; }
+.setup-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em; color: var(--label); }
+.count-toggle { display: flex; gap: 6px; }
+.count-btn {
+  font-family: var(--sans); font-size: 15px; font-weight: 700;
+  width: 40px; height: 36px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-2); background: var(--panel-2); color: var(--ink-soft);
+  cursor: pointer; transition: all 0.12s ease;
+}
+.count-btn:hover { border-color: var(--sage); }
+.count-btn.active { border-color: var(--sage); background: var(--sage-tint); color: var(--sage-deep); }
+
+.setup-seats { display: flex; flex-direction: column; gap: 10px; }
+.setup-seat {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 14px; background: var(--panel-2);
+}
+.seat-name { font-family: var(--serif); font-size: 17px; font-weight: 600; }
+.seat-select {
+  font-family: var(--sans); font-size: 14px;
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-2); background: var(--panel);
+  color: var(--ink); cursor: pointer; min-width: 180px;
+}
+.seat-select:hover { border-color: var(--sage); }
+.setup-note { color: var(--muted); font-size: 12.5px; margin-top: 16px; text-align: left; }
 
 /* ---- responsive ----------------------------------------------------------- */
 

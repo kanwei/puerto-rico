@@ -12,11 +12,13 @@
      {\"s\": [floats]     ; encoded state, egocentric (seat 0 = the actor)
       \"p\": [98 floats]  ; MCTS visit distribution over the action space
       \"v\": [n floats]   ; final win/loss outcome, rotated so index 0 = actor
-      \"z\": [n floats]}  ; final normalized scores, rotated so index 0 = actor
+      \"sm\": [n floats]} ; final SCORE MARGINS (score - table average),
+                         ; rotated so index 0 = actor; sums to 0
 
-   The score target (z) is the auxiliary 'score margin' head: predicting how
-   many points everyone ends with is a far richer signal than win/loss alone
-   and speeds up learning."
+   The margin target (sm) feeds the auxiliary score-margin head: predicting how
+   far ahead/behind the pack each player ends is a far richer, zero-centered
+   signal than win/loss alone. It also drives the MCTS utility blend so the AI
+   keeps maximizing its point lead even when the win is already decided."
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.set :as set]
@@ -27,10 +29,6 @@
             [puerto-rico.ai.mcts :as mcts]
             [puerto-rico.ai.nn :as nn]
             [puerto-rico.ai.heuristic :as heuristic]))
-
-(def score-norm
-  "Divisor mapping a final VP total to roughly [0,1] for the score head"
-  60.0)
 
 (defn- mk-game [n]
   ;; every seat is AI-driven in self-play / arena / eval, so mark them :is-ai -
@@ -68,9 +66,14 @@
   (let [n (count v)]
     (mapv #(nth v (mod (+ seat %) n)) (range n))))
 
-(defn- score-vector [gs]
-  (mapv #(min 1.0 (/ (double (state/calculate-victory-points %)) score-norm))
-        (:players gs)))
+(defn- score-margin-vector
+  "Each player's final score minus the table average (in points). Zero-centered
+   and sums to 0 - a stable target regardless of whether the game ran high or
+   low scoring."
+  [gs]
+  (let [scores (mapv #(double (state/calculate-victory-points %)) (:players gs))
+        avg (/ (reduce + scores) (count scores))]
+    (mapv #(- % avg) scores)))
 
 (defn play-training-game
   "Play one all-MCTS game; returns {:examples [...] :winner-idx int :rounds int}"
@@ -80,12 +83,12 @@
     (cond
       (:game-over gs)
       (let [outcome (mcts/outcome-vector gs)
-            scores (score-vector gs)
+            margins (score-margin-vector gs)
             winner-idx (first (keep-indexed #(when (= 1.0 %2) %1) outcome))]
         {:examples (mapv (fn [{:keys [state policy seat]}]
                            {:s state :p policy
                             :v (rotate outcome seat)
-                            :z (rotate scores seat)})
+                            :sm (rotate margins seat)})
                          examples)
          :winner-idx winner-idx
          :rounds (:round gs)})
