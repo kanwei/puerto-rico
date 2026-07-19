@@ -189,10 +189,12 @@
   [player]
   (not (can-place-colonist? player)))
 
+(declare mayor-next-turn)
+
 (defn begin-mayor-phase
   "Runs when the mayor placard is selected: privilege colonist from the supply,
-   deal the ship one at a time clockwise from the mayor, then sweep the first
-   player's board for re-placement."
+   deal the ship one at a time clockwise from the mayor, then start the
+   placement turns (mayor first)."
   [game-state]
   (let [selector-idx (:role-selector-idx game-state)
         num-players (count (:players game-state))
@@ -212,7 +214,7 @@
                             (recur (update-in game [:players idx :colonists-in-hand] inc)
                                    (dec remaining)
                                    (mod (inc idx) num-players))))]
-    (sweep-colonists-to-hand game-after-ship selector-idx)))
+    (mayor-next-turn game-after-ship 0)))
 
 (defn execute-mayor-placement
   "Place one colonist from the player's hand on a tile of the given type.
@@ -260,6 +262,54 @@
                (-> player
                    (update :san-juan-colonists + (:colonists-in-hand player))
                    (assoc :colonists-in-hand 0)))))
+
+(defn empty-circle-count [player]
+  (+ (count (filter #(zero? (:colonists %)) (:plantations player)))
+     (reduce + (map get-empty-spaces (:buildings player)))))
+
+(defn- fill-all-circles
+  "Rulebook shortcut: all empty circles must be filled if possible, so when the
+   hand covers every circle there is no decision - man everything and send the
+   leftovers to San Juan"
+  [game-state player-idx]
+  (update-in game-state [:players player-idx]
+             (fn [player]
+               (let [placed (empty-circle-count player)]
+                 (-> player
+                     (update :plantations (fn [ps] (mapv #(assoc % :colonists 1) ps)))
+                     (update :buildings (fn [bs] (mapv #(assoc % :colonists (get-tile-capacity %)) bs)))
+                     (update :san-juan-colonists + (- (:colonists-in-hand player) placed))
+                     (assoc :colonists-in-hand 0))))))
+
+(declare finish-role-execution)
+
+(defn- mayor-next-turn
+  "Hand the placement turn to each player from order-position onward, sweeping
+   their board first. Players whose hand covers every circle have no real
+   choice and are auto-filled. Refill the ship and end the role when nobody
+   is left."
+  [game-state order-position]
+  (let [order (:role-execution-order game-state)]
+    (loop [gs game-state, pos order-position]
+      (if (>= pos (count order))
+        (-> gs refill-colonist-ship finish-role-execution)
+        (let [idx (nth order pos)
+              gs (sweep-colonists-to-hand gs idx)
+              player (get-in gs [:players idx])
+              hand (:colonists-in-hand player)
+              circles (empty-circle-count player)]
+          (cond
+            ;; Nothing to place (no colonists, or board already full): skip
+            (or (zero? hand) (zero? circles))
+            (recur (finish-mayor-turn gs idx) (inc pos))
+
+            ;; Hand covers every circle: forced fill, no choice
+            (>= hand circles)
+            (recur (fill-all-circles gs idx) (inc pos))
+
+            ;; Real choice of where to place
+            :else
+            (assoc gs :role-execution-current-idx idx)))))))
 
 (defn building-cost
   "Actual cost of a building for a player: base cost minus quarry discount
@@ -371,22 +421,9 @@
                                                                         acc))
                                                                     {} total-production)
 
-                                         ;; Role selector privilege: +1 of one produced kind (auto-choose the
-                                         ;; most valuable kind that still has supply left)
-                                         privilege-production (if (and is-role-selector? (seq limited-production))
-                                                                (let [privilege-good (->> (keys limited-production)
-                                                                                          (filter #(> (get current-supply % 0)
-                                                                                                      (get limited-production % 0)))
-                                                                                          (sort-by good-values >)
-                                                                                          first)]
-                                                                  (if privilege-good
-                                                                    (update limited-production privilege-good inc)
-                                                                    limited-production))
-                                                                limited-production)
-
                                          ;; Calculate factory bonus if player has occupied factory
                                          has-factory (has-occupied-building? player :factory)
-                                         goods-types-produced (count (filter #(> (second %) 0) privilege-production))
+                                         goods-types-produced (count (filter #(> (second %) 0) limited-production))
                                          factory-bonus (if (and has-factory (> goods-types-produced 1))
                                                          (case goods-types-produced
                                                            2 1 ; 2 kinds = 1 doubloon
@@ -399,7 +436,7 @@
                                          ;; Update player's goods
                                          updated-goods (reduce (fn [goods [good-type amount]]
                                                                  (update goods good-type + amount))
-                                                               (:goods player) privilege-production)
+                                                               (:goods player) limited-production)
 
                                          ;; Update player with new goods and factory bonus
                                          updated-player (-> player
@@ -409,20 +446,51 @@
                                          ;; Update goods supply by removing produced goods
                                          updated-supply (reduce (fn [supply [good-type amount]]
                                                                   (update supply good-type - amount))
-                                                                current-supply privilege-production)]
+                                                                current-supply limited-production)]
 
-                                     ;; Return updated game state
-                                     (-> current-game-state
-                                         (assoc-in [:players player-idx] updated-player)
-                                         (assoc :goods-supply updated-supply))))
+                                     ;; Return updated game state, remembering what the
+                                     ;; selector produced (their privilege choices)
+                                     (cond-> (-> current-game-state
+                                                 (assoc-in [:players player-idx] updated-player)
+                                                 (assoc :goods-supply updated-supply))
+                                       is-role-selector?
+                                       (assoc :craftsman-produced (set (keys limited-production))))))
 
         ;; Process each player in turn order
         final-game-state (reduce (fn [current-game player-idx]
                                    (let [is-role-selector? (= player-idx role-selector-idx)]
                                      (produce-goods-for-player current-game player-idx is-role-selector?)))
                                  game-state
-                                 turn-order)]
-    final-game-state))
+                                 turn-order)
+        ;; Privilege is the craftsman's LAST duty: one extra good of a kind
+        ;; they produced, taken after everyone has produced (supply allowing).
+        ;; With a real choice (2+ kinds available) the selector must decide.
+        produced (get final-game-state :craftsman-produced #{})
+        candidates (set (filter #(pos? (get-in final-game-state [:goods-supply %])) produced))
+        gs (dissoc final-game-state :craftsman-produced)]
+    (cond
+      (empty? candidates) gs
+
+      (= 1 (count candidates))
+      (let [good (first candidates)]
+        (-> gs
+            (update-in [:players role-selector-idx :goods good] inc)
+            (update-in [:goods-supply good] dec)))
+
+      :else (assoc gs :craftsman-privilege-pending candidates))))
+
+(defn execute-craftsman-privilege
+  "Selector's craftsman privilege: take one extra good of a kind they produced"
+  [game-state player-id good]
+  (let [player-idx (state/player-index game-state player-id)
+        candidates (get game-state :craftsman-privilege-pending #{})]
+    (if (and (contains? candidates good)
+             (= player-idx (:role-selector-idx game-state)))
+      (-> game-state
+          (update-in [:players player-idx :goods good] inc)
+          (update-in [:goods-supply good] dec)
+          (dissoc :craftsman-privilege-pending))
+      game-state)))
 
 (defn has-occupied-building? [player building-type]
   "Check if player has an occupied building of the given type"
@@ -836,6 +904,7 @@
                           :captain (-> base-game
                                        (return-full-ships-to-supply)
                                        (dissoc :captain-bonus-awarded :captain-passes :wharf-used))
+                          :craftsman (dissoc base-game :craftsman-privilege-pending)
                           base-game)
         players-selected (:players-selected-this-round game-after-role)
         num-players (count (:players game-after-role))]
@@ -871,7 +940,7 @@
 
 (defn- advance-mayor
   "Finish the current player's placement turn (leftovers to San Juan), then
-   sweep the next player's board - or refill the colonist ship and end the role"
+   move on to the remaining players - or refill the ship and end the role"
   [game-state]
   (let [execution-order (:role-execution-order game-state)
         current-idx (:role-execution-current-idx game-state)]
@@ -879,14 +948,9 @@
     ;; player can still place
     (if (can-place-colonist? (get-in game-state [:players current-idx]))
       game-state
-      (let [gs (finish-mayor-turn game-state current-idx)
-            next-position (inc (.indexOf execution-order current-idx))]
-        (if (>= next-position (count execution-order))
-          (-> gs refill-colonist-ship finish-role-execution)
-          (let [next-idx (nth execution-order next-position)]
-            (-> gs
-                (assoc :role-execution-current-idx next-idx)
-                (sweep-colonists-to-hand next-idx))))))))
+      (-> game-state
+          (finish-mayor-turn current-idx)
+          (mayor-next-turn (inc (.indexOf execution-order current-idx)))))))
 
 (defn advance-role-execution [game-state]
   "Move to the next player in role execution order, or end the role when all
@@ -914,7 +978,16 @@
              (execute-mayor-placement game-state player-id (second args) (nth args 2))
              game-state)
     :builder (execute-builder game-state player-id (first args))
-    :craftsman (execute-craftsman game-state)
+    ;; Craftsman: table-wide production, then possibly the selector's
+    ;; privilege pick [:privilege good]
+    :craftsman (cond
+                 (= (first args) :privilege)
+                 (execute-craftsman-privilege game-state player-id (second args))
+
+                 ;; already produced - waiting on the privilege pick
+                 (:craftsman-privilege-pending game-state) game-state
+
+                 :else (execute-craftsman game-state))
     :trader (execute-trader game-state player-id (first args))
     ;; Captain: loading turns, or storage picks during the storage sub-phase
     :captain (if (:storage-phase game-state)
@@ -968,9 +1041,15 @@
           game-after
           (advance-role-execution game-after))
 
-        ;; Craftsman executes once for the whole table; prospector only
-        ;; affects the selector - end the role immediately
-        (contains? #{:craftsman :prospector :prospector-2} role)
+        ;; Craftsman: production runs once for the whole table, but the role
+        ;; only ends once the selector's privilege pick is resolved
+        (= role :craftsman)
+        (if (:craftsman-privilege-pending game-after)
+          game-after
+          (end-role-execution game-after))
+
+        ;; Prospector only affects the selector - end the role immediately
+        (contains? #{:prospector :prospector-2} role)
         (end-role-execution game-after)
 
         ;; Captain storage: picks continue the turn; auto-finalize once

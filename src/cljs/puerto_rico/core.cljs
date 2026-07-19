@@ -261,17 +261,18 @@
             (js/console.log "Player skipped role:" role "for player:" (:name executor-player))))))))
 
 (defn handle-automatic-role-execution [game-data]
-  "Automatically execute roles that don't require choices. The craftsman
-   executes once for the whole table; the prospector only affects the
-   selector - both end the role immediately."
+  "Run roles that mostly need no input. The craftsman produces for the whole
+   table, then may owe the selector a privilege pick (which stays on screen);
+   the prospector only affects the selector and ends immediately."
   (let [current-role (:selected-role game-data)
         executor (current-role-executor game-data)]
     (case current-role
       :craftsman
-      (swap! game-state assoc :game-state
-             (-> game-data
-                 (rules/execute-role current-role nil)
-                 (rules/end-role-execution)))
+      (let [after-production (rules/execute-role game-data :craftsman nil)]
+        (if (:craftsman-privilege-pending after-production)
+          ;; selector must choose which extra good to take
+          (swap! game-state assoc :game-state after-production)
+          (swap! game-state assoc :game-state (rules/end-role-execution after-production))))
 
       (:prospector :prospector-2)
       (swap! game-state assoc :game-state
@@ -281,6 +282,16 @@
 
       ;; Other roles require player choices
       nil)))
+
+(defn handle-craftsman-privilege [good]
+  (let [current-game (:game-state @game-state)
+        selector (nth (:players current-game) (:role-selector-idx current-game))]
+    (when-not (:is-ai selector)
+      (add-log-entry (str "⚒️ Craftsman privilege: took an extra " (name good)) (:name selector)))
+    (swap! game-state assoc :game-state
+           (rules/apply-move current-game
+                             {:type :role-action :role :craftsman
+                              :player-id (:id selector) :args [:privilege good]}))))
 
 ;; --------------------------------------------------------------------------
 ;; Mayor placement (human)
@@ -395,7 +406,9 @@
                                    "⛵ Passed shipping")
                    (= (second args) :wharf) (str "⚓ Wharf-shipped all " (name (first args)))
                    :else (str "🚢 Shipped " (name (first args))))
-        :craftsman "⚒️ Produced goods (all players)"
+        :craftsman (if (= (first args) :privilege)
+                     (str "⚒️ Craftsman privilege: extra " (name (second args)))
+                     "⚒️ Produced goods (all players)")
         (:prospector :prospector-2) "💰 Prospector: +1 doubloon"
         "⏭️ Acted")
       "⏭️ Acted")))
@@ -786,11 +799,21 @@
       :captain (if (:storage-phase game-data)
                  [storage-choice-ui game-data]
                  [good-choice-ui game-data :captain])
-      ;; For automatic roles, show status
       :craftsman
-      [:div.role-execution
-       [:h2 "🔄 Craftsman - Executing Automatically"]
-       [:p (:name executor-player) " is producing goods..."]]
+      (if-let [candidates (:craftsman-privilege-pending game-data)]
+        ;; selector picks which produced kind to take as the privilege
+        [:div.role-execution
+         [:h2 "⚒️ Craftsman - Choose Your Privilege"]
+         [:p "You produced multiple kinds - take one extra good of a kind you made:"]
+         [:div.choice-grid
+          (for [good (sort candidates)]
+            ^{:key (str "priv-" (name good))}
+            [:div.choice-card {:on-click #(handle-craftsman-privilege good)}
+             [:h3 (name good)]
+             [:p "+1 " (name good)]])]]
+        [:div.role-execution
+         [:h2 "🔄 Craftsman - Executing Automatically"]
+         [:p (:name executor-player) " is producing goods..."]])
       ;; Default case
       [:div.role-execution
        [:h2 "Role Execution"]

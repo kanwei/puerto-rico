@@ -15,23 +15,41 @@
 ;; --------------------------------------------------------------------------
 
 (deftest action-space-is-fixed
-  (is (= 93 actions/num-actions))
+  (is (= 98 actions/num-actions))
   (is (= 23 (count actions/building-order)))
   (is (= (set actions/building-order) (set (keys state/buildings)))))
 
 (deftest mayor-placement-actions
-  (let [g (-> (mk-game) (assoc :colonist-ship 3))
+  ;; Give P1 a large building so hand (2) < circles (4): a real placement choice
+  (let [g (-> (mk-game)
+              (update-in [:players 0 :buildings] conj {:type :large-indigo-maker :colonists 0})
+              (assoc :colonist-ship 3))
         g2 (rules/select-role g 1 :mayor)
         ids (set (actions/legal-action-ids g2))]
-    ;; P1 has colonists in hand and an unmanned indigo plantation:
-    ;; placement is mandatory, so no pass action
+    ;; placement is mandatory, so no pass action while a colonist can be placed
     (is (contains? ids (actions/action-id {:kind :place-plantation :plantation :indigo})))
+    (is (contains? ids (actions/action-id {:kind :place-building :building :large-indigo-maker})))
     (is (not (contains? ids (actions/action-id {:kind :pass}))))
     ;; placing keeps the turn with the same player
     (let [g3 (actions/apply-action g2 (actions/action-id {:kind :place-plantation :plantation :indigo}))]
-      (is (= (:role-execution-current-idx g2) (:role-execution-current-idx g3)))
-      ;; nothing else placeable: now done is the only option
-      (is (= [(actions/action-id {:kind :pass})] (actions/legal-action-ids g3))))))
+      (is (= (:role-execution-current-idx g2) (:role-execution-current-idx g3))))))
+
+(deftest craftsman-privilege-actions
+  (let [g (-> (mk-game)
+              (assoc-in [:players 0 :plantations] [{:type :corn :colonists 1}
+                                                   {:type :indigo :colonists 1}])
+              (assoc-in [:players 0 :buildings] [{:type :small-indigo-maker :colonists 1}])
+              (assoc :current-player-idx 0))
+        g1 (rules/select-role g 1 :craftsman)
+        ;; produce via the pass action
+        g2 (actions/apply-action g1 (actions/action-id {:kind :pass}))
+        ids (set (actions/legal-action-ids g2))]
+    ;; selector produced corn + indigo -> a privilege choice between them
+    (is (contains? ids (actions/action-id {:kind :privilege-good :good :corn})))
+    (is (contains? ids (actions/action-id {:kind :privilege-good :good :indigo})))
+    (let [g3 (actions/apply-action g2 (actions/action-id {:kind :privilege-good :good :indigo}))]
+      (is (= 2 (get-in g3 [:players 0 :goods :indigo])))
+      (is (not= :role-execution (:phase g3))))))
 
 (deftest legal-actions-at-game-start
   (let [g (mk-game)

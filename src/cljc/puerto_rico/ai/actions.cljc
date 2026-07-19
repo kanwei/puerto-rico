@@ -52,7 +52,9 @@
     ;; 83-87: storage - keep all goods of one kind (warehouse slot)
     (map (fn [g] {:kind :store-kind :good g}) good-order)
     ;; 88-92: storage - keep one single good on the windrose
-    (map (fn [g] {:kind :store-single :good g}) good-order))))
+    (map (fn [g] {:kind :store-single :good g}) good-order)
+    ;; 93-97: craftsman privilege - which produced kind to take
+    (map (fn [g] {:kind :privilege-good :good g}) good-order))))
 
 (def num-actions (count action-table))
 
@@ -150,7 +152,14 @@
             (vec places)
             [pass-id]))
 
-        ;; Craftsman / prospector have no choices
+        :craftsman
+        ;; After production the selector may face a privilege choice
+        (if-let [candidates (seq (:craftsman-privilege-pending game-state))]
+          (mapv #(action-id {:kind :privilege-good :good %})
+                (sort-by good-order-index candidates))
+          [pass-id])
+
+        ;; Prospector has no choices
         [pass-id]))
 
     :else []))
@@ -182,6 +191,8 @@
                    :args [:store-kind good]}
       :store-single {:type :role-action :role :captain :player-id player-id
                      :args [:store-single good]}
+      :privilege-good {:type :role-action :role :craftsman :player-id player-id
+                       :args [:privilege good]}
       :pass {:type :role-action :role (:selected-role game-state)
              :player-id player-id :args []})))
 

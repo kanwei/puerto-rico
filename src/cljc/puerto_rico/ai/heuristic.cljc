@@ -402,6 +402,12 @@
         :mayor
         (best-mayor-placement player)
 
+        :craftsman
+        ;; After production the selector may owe a privilege pick
+        (if-let [candidates (seq (:craftsman-privilege-pending game-state))]
+          [:privilege (apply max-key #(get rules/good-values % 0) candidates)]
+          :execute)
+
         ;; For roles with no choices
         :execute))
 

@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """AlphaZero-style network for Puerto Rico.
 
-Trains a residual MLP with a policy head (54 actions) and a value head
-(one win-probability logit per player) on self-play data produced by
-`clj -M:selfplay generate`.
+Trains a residual MLP with three heads on self-play data produced by
+`clj -M:selfplay generate`:
+  - policy head: one logit per action (softmax cross-entropy vs MCTS visits)
+  - value head:  one logit per player, win probability (cross-entropy vs outcome)
+  - score head:  one output per player, normalized final score (MSE) -- the
+                 auxiliary 'score margin' target, a much richer learning signal
+                 than win/loss that speeds up training substantially.
 
 Usage:
     python train.py --data ../data/selfplay.jsonl --out ../models/pr
@@ -56,23 +60,29 @@ class PuertoRicoNet(nn.Module):
         self.body = nn.Sequential(*[ResBlock(width) for _ in range(blocks)])
         self.policy_head = nn.Linear(width, n_actions)
         self.value_head = nn.Linear(width, n_players)
+        self.score_head = nn.Linear(width, n_players)
 
     def forward(self, x):
         h = self.body(self.stem(x))
-        return self.policy_head(h), self.value_head(h)  # raw logits
+        # policy & value are logits; score is a normalized [0,1] regression
+        return (self.policy_head(h),
+                self.value_head(h),
+                torch.sigmoid(self.score_head(h)))
 
 
 def load_data(path: str):
-    states, policies, values = [], [], []
+    states, policies, values, scores = [], [], [], []
     with open(path) as f:
         for line in f:
             ex = json.loads(line)
             states.append(ex["s"])
             policies.append(ex["p"])
             values.append(ex["v"])
+            scores.append(ex.get("z", ex["v"]))  # fall back if pre-score data
     return (torch.tensor(states, dtype=torch.float32),
             torch.tensor(policies, dtype=torch.float32),
-            torch.tensor(values, dtype=torch.float32))
+            torch.tensor(values, dtype=torch.float32),
+            torch.tensor(scores, dtype=torch.float32))
 
 
 def soft_cross_entropy(logits, target):
@@ -89,11 +99,13 @@ def main():
     ap.add_argument("--weight-decay", type=float, default=1e-4)
     ap.add_argument("--width", type=int, default=512)
     ap.add_argument("--blocks", type=int, default=6)
+    ap.add_argument("--score-weight", type=float, default=1.0,
+                    help="weight of the auxiliary score-margin MSE loss")
     ap.add_argument("--resume", help="checkpoint (.pt) to continue from")
     args = ap.parse_args()
 
     device = pick_device()
-    states, policies, values = load_data(args.data)
+    states, policies, values, scores = load_data(args.data)
     in_dim, n_actions, n_players = states.shape[1], policies.shape[1], values.shape[1]
     print(f"device={device}  examples={len(states)}  "
           f"in_dim={in_dim}  actions={n_actions}  players={n_players}")
@@ -106,26 +118,29 @@ def main():
 
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr,
                             weight_decay=args.weight_decay)
-    loader = DataLoader(TensorDataset(states, policies, values),
+    loader = DataLoader(TensorDataset(states, policies, values, scores),
                         batch_size=args.batch, shuffle=True)
+    mse = nn.MSELoss()
 
     for epoch in range(args.epochs):
-        t0, p_sum, v_sum, batches = time.time(), 0.0, 0.0, 0
-        for s, p, v in loader:
-            s, p, v = s.to(device), p.to(device), v.to(device)
-            p_logits, v_logits = net(s)
+        t0, p_sum, v_sum, z_sum, batches = time.time(), 0.0, 0.0, 0.0, 0
+        for s, p, v, z in loader:
+            s, p, v, z = s.to(device), p.to(device), v.to(device), z.to(device)
+            p_logits, v_logits, z_pred = net(s)
             p_loss = soft_cross_entropy(p_logits, p)
             v_loss = soft_cross_entropy(v_logits, v)
-            loss = p_loss + v_loss
+            z_loss = mse(z_pred, z)
+            loss = p_loss + v_loss + args.score_weight * z_loss
             opt.zero_grad()
             loss.backward()
             opt.step()
             p_sum += p_loss.item()
             v_sum += v_loss.item()
+            z_sum += z_loss.item()
             batches += 1
         print(f"epoch {epoch + 1}/{args.epochs}  "
               f"policy_loss={p_sum / batches:.4f}  value_loss={v_sum / batches:.4f}  "
-              f"({time.time() - t0:.1f}s)")
+              f"score_loss={z_sum / batches:.4f}  ({time.time() - t0:.1f}s)")
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     torch.save({"model": net.state_dict(),
@@ -138,10 +153,11 @@ def main():
     dummy = torch.zeros(1, in_dim)
     torch.onnx.export(net, dummy, args.out + ".onnx",
                       input_names=["state"],
-                      output_names=["policy_logits", "value_logits"],
+                      output_names=["policy_logits", "value_logits", "score"],
                       dynamic_axes={"state": {0: "batch"},
                                     "policy_logits": {0: "batch"},
-                                    "value_logits": {0: "batch"}})
+                                    "value_logits": {0: "batch"},
+                                    "score": {0: "batch"}})
     print(f"saved {args.out}.pt and {args.out}.onnx")
 
 

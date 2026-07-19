@@ -63,6 +63,7 @@
   (let [phase-key (cond
                     (= (:phase game-state) :role-selection) :selecting
                     (:storage-phase game-state) :storage
+                    (:craftsman-privilege-pending game-state) :privilege
                     :else (case (:selected-role game-state)
                             :settler :settler
                             :builder :builder
@@ -76,9 +77,9 @@
         storage-picks (get-in game-state [:storage-picks actor-idx])]
     (-> []
         (conj (norm (:round game-state) 20))
-        ;; decision type one-hot (8)
-        (into (one-hot 8 ({:selecting 0 :settler 1 :builder 2 :trader 3
-                           :captain 4 :mayor 5 :storage 6 :other 7}
+        ;; decision type one-hot (9)
+        (into (one-hot 9 ({:selecting 0 :settler 1 :builder 2 :trader 3
+                           :captain 4 :mayor 5 :storage 6 :privilege 7 :other 8}
                           phase-key)))
         ;; 8 role slots x [in this game?, available?, gold]
         (into (mapcat (fn [r]
@@ -128,7 +129,10 @@
                    actions/good-order))
         (into (one-hot 6 (if-let [s (:single storage-picks)]
                            (inc (good-index s))
-                           0))))))
+                           0)))
+        ;; craftsman privilege candidates (kinds the selector produced)
+        (into (map (fn [g] (flag (contains? (get game-state :craftsman-privilege-pending #{}) g)))
+                   actions/good-order)))))
 
 ;; --------------------------------------------------------------------------
 ;; Public API
@@ -148,10 +152,10 @@
         (into (encode-global game-state actor-idx n)))))
 
 (defn encoded-size
-  "Input width for a game with n players (3 players: 322)"
+  "Input width for a game with n players (3 players: 328)"
   [n]
   (+ (* 67 n)          ;; per-player blocks
-     1 8 24            ;; round, decision type, role slots
+     1 9 24            ;; round, decision type, role slots
      n (inc n)         ;; governor + selector offsets
      5 1 1 1           ;; plantation display
      3                 ;; colonist ship/supply, VP supply
@@ -160,4 +164,5 @@
      24                ;; ships
      1 1 n             ;; captain flags
      1                 ;; hacienda flag
-     5 6))             ;; storage picks (kinds + single)
+     5 6               ;; storage picks (kinds + single)
+     5))               ;; craftsman privilege candidates

@@ -18,11 +18,35 @@
 
 ;; --------------------------------------------------------------------------
 ;; Random sampling helpers (Box-Muller normal, Marsaglia-Tsang gamma)
+;;
+;; On the JVM `rand`/`rand-nth`/`shuffle` all funnel through one synchronized
+;; global generator, which becomes a lock-contention bottleneck when many
+;; self-play games run in parallel. These helpers use a per-thread RNG so each
+;; worker thread draws without contending. CLJS falls back to the built-ins.
 ;; --------------------------------------------------------------------------
 
+(defn drand
+  "Uniform double in [0,1), contention-free per thread on the JVM"
+  []
+  #?(:clj (.nextDouble (java.util.concurrent.ThreadLocalRandom/current))
+     :cljs (rand)))
+
+(defn drand-int [n]
+  #?(:clj (.nextInt (java.util.concurrent.ThreadLocalRandom/current) (int n))
+     :cljs (rand-int n)))
+
+(defn drand-nth [coll]
+  (nth coll (drand-int (count coll))))
+
+(defn dshuffle [coll]
+  #?(:clj (let [a (java.util.ArrayList. ^java.util.Collection coll)]
+            (java.util.Collections/shuffle a (java.util.concurrent.ThreadLocalRandom/current))
+            (vec a))
+     :cljs (shuffle coll)))
+
 (defn- rand-normal []
-  (let [u (max 1e-12 (rand))
-        v (rand)]
+  (let [u (max 1e-12 (drand))
+        v (drand)]
     (* (Math/sqrt (* -2.0 (Math/log u)))
        (Math/cos (* 2.0 Math/PI v)))))
 
@@ -30,7 +54,7 @@
   (if (< alpha 1.0)
     ;; boost: gamma(a) = gamma(a+1) * U^(1/a)
     (* (rand-gamma (inc alpha))
-       (Math/pow (max 1e-12 (rand)) (/ 1.0 alpha)))
+       (Math/pow (max 1e-12 (drand)) (/ 1.0 alpha)))
     (let [d (- alpha (/ 1.0 3.0))
           c (/ 1.0 (Math/sqrt (* 9.0 d)))]
       (loop []
@@ -39,7 +63,7 @@
           (if (<= t 0.0)
             (recur)
             (let [v (* t t t)
-                  u (max 1e-12 (rand))]
+                  u (max 1e-12 (drand))]
               (cond
                 (< u (- 1.0 (* 0.0331 x x x x))) (* d v)
                 (< (Math/log u)
@@ -77,7 +101,7 @@
       (let [ids (actions/legal-action-ids gs)]
         (if (empty? ids)
           gs
-          (recur (actions/apply-action gs (rand-nth ids)) (inc steps)))))))
+          (recur (actions/apply-action gs (drand-nth ids)) (inc steps)))))))
 
 (defn rollout-evaluator
   "Evaluator that plays the game out with uniformly random actions.
@@ -162,7 +186,7 @@
         evaluate (or evaluate (rollout-evaluator))
         opts* {:evaluate evaluate :c-puct c-puct}
         legal-ids (actions/legal-action-ids game-state)
-        determinize #(update % :plantation-supply (comp vec shuffle))
+        determinize #(update % :plantation-supply dshuffle)
         ;; expand the root once, then optionally mix in Dirichlet noise
         [_ root] (simulate {} (determinize game-state) opts*)
         root (if (pos? dirichlet-frac)
@@ -190,7 +214,7 @@
                           [id (Math/pow (double n) (/ 1.0 temperature))])
                         visits)
           total (reduce + (map second weighted))
-          r (* (rand) total)]
+          r (* (drand) total)]
       (loop [[[id w] & more] weighted, acc 0.0]
         (let [acc (+ acc w)]
           (if (or (>= acc r) (empty? more))

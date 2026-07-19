@@ -123,15 +123,29 @@
                 (assoc :role-selector-idx 1))
           g2 (rules/execute-craftsman g)]
       (is (= 3 (get-in g2 [:players 0 :goods :indigo])))))
-  (testing "privilege takes the most valuable produced good"
+  (testing "privilege is a separate choice when 2+ kinds were produced"
     (let [g (-> (mk-game 3)
                 (set-player 0 {:plantations [{:type :corn :colonists 1}
                                              {:type :coffee :colonists 1}]
                                :buildings [{:type :coffee-maker :colonists 1}]})
                 (assoc :role-selector-idx 0))
+          ;; production alone: 1 corn + 1 coffee, then a pending privilege choice
           g2 (rules/execute-craftsman g)]
       (is (= 1 (get-in g2 [:players 0 :goods :corn])))
-      (is (= 2 (get-in g2 [:players 0 :goods :coffee])))))
+      (is (= 1 (get-in g2 [:players 0 :goods :coffee])))
+      (is (= #{:corn :coffee} (:craftsman-privilege-pending g2)))
+      ;; selector picks coffee as the extra good
+      (let [g3 (rules/execute-craftsman-privilege g2 1 :coffee)]
+        (is (= 2 (get-in g3 [:players 0 :goods :coffee])))
+        (is (nil? (:craftsman-privilege-pending g3))))))
+  (testing "privilege auto-resolves when only one kind was produced"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:plantations [{:type :corn :colonists 1}]})
+                (assoc :role-selector-idx 0))
+          g2 (rules/execute-craftsman g)]
+      ;; 1 produced + 1 privilege, no pending decision
+      (is (= 2 (get-in g2 [:players 0 :goods :corn])))
+      (is (nil? (:craftsman-privilege-pending g2)))))
   (testing "factory pays for kinds produced"
     (let [g (-> (mk-game 3)
                 (set-player 0 {:money 0
@@ -364,7 +378,10 @@
 (deftest mayor-distribution
   (testing "ship colonists are dealt starting with the mayor, plus supply privilege"
     (let [g (-> (mk-game 3)
-                (assoc :governor-idx 0 :colonist-ship 4 :current-player-idx 2))
+                (assoc :governor-idx 0 :colonist-ship 4 :current-player-idx 2)
+                ;; give the mayor open circles so placement stops for a choice
+                ;; (otherwise the forced-fill shortcut would auto-resolve it)
+                (set-player 2 {:buildings [{:type :large-indigo-maker :colonists 0}]}))
           ;; P3 (seat 2) selects mayor: distribution happens immediately
           g2 (rules/select-role g 3 :mayor)]
       ;; deal order: P3 P1 P2 P3 -> P3 has 2 + 1 privilege in hand, P1 1, P2 1
@@ -372,10 +389,20 @@
       (is (= 1 (get-in g2 [:players 1 :colonists-in-hand])))
       (is (= 3 (get-in g2 [:players 2 :colonists-in-hand])))
       (is (zero? (:colonist-ship g2)))
-      ;; the mayor places first
+      ;; the mayor (open circles, real choice) places first
       (is (= 2 (:role-execution-current-idx g2)))))
-  (testing "placement is one colonist at a time; done only when nothing is placeable"
+  (testing "forced-fill shortcut: hand >= circles auto-fills, no decision needed"
     (let [g (-> (mk-game 3) (assoc :colonist-ship 3))
+          ;; each player has exactly 1 circle and >=1 colonist -> all auto-filled
+          g2 (rules/select-role g 1 :mayor)]
+      (is (= :role-selection (:phase g2)))                       ;; role fully resolved
+      (is (= 1 (:colonists (first (get-in g2 [:players 0 :plantations])))))
+      (is (= 1 (get-in g2 [:players 0 :san-juan-colonists])))))  ;; 2 in hand, 1 circle -> 1 left over
+  (testing "placement is one at a time; done only when nothing is placeable"
+    (let [g (-> (mk-game 3)
+                ;; large building gives P1 4 circles for 2 colonists -> real choice
+                (set-player 0 {:buildings [{:type :large-indigo-maker :colonists 0}]})
+                (assoc :colonist-ship 3))
           g2 (rules/select-role g 1 :mayor)   ;; P1: 1 dealt + 1 privilege = 2 in hand
           place {:type :role-action :role :mayor :player-id 1
                  :args [:place-colonist :plantation :indigo]}
@@ -387,19 +414,19 @@
       (is (identical? g2 g-refused))
       (is (= 1 (get-in g3 [:players 0 :colonists-in-hand])))
       (is (= 1 (:colonists (first (get-in g3 [:players 0 :plantations])))))
-      ;; the island is now fully manned: done moves leftovers to San Juan
-      (let [g4 (rules/apply-move g3 done)]
-        (is (= 1 (get-in g4 [:players 0 :san-juan-colonists])))
-        (is (= 1 (:role-execution-current-idx g4))))))
+      ;; still a colonist and open circles: same player keeps placing
+      (is (= 0 (:role-execution-current-idx g3)))))
   (testing "placement can rearrange: the board is swept into hand at turn start"
     (let [g (-> (mk-game 3)
                 (set-player 0 {:plantations [{:type :corn :colonists 1}
-                                             {:type :indigo :colonists 0}]})
+                                             {:type :indigo :colonists 0}
+                                             {:type :sugar :colonists 0}]})
                 (assoc :colonist-ship 0 :colonist-supply 0))
           g2 (rules/select-role g 1 :mayor)]
-      ;; the corn colonist was swept into hand for re-placement
+      ;; 1 colonist swept from the board into hand, 3 open circles -> a choice
       (is (= 1 (get-in g2 [:players 0 :colonists-in-hand])))
-      (is (zero? (:colonists (first (get-in g2 [:players 0 :plantations])))))))
+      (is (zero? (:colonists (first (get-in g2 [:players 0 :plantations])))))
+      (is (= 0 (:role-execution-current-idx g2)))))
   (testing "ship refill at phase end: empty building circles, minimum player count"
     (let [g (-> (mk-game 3)
                 (set-player 0 {:buildings [{:type :large-indigo-maker :colonists 0}
