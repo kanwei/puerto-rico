@@ -294,6 +294,57 @@
          first)))
 
 ;; ================================================================================
+;; Mayor placement and storage heuristics
+;; ================================================================================
+
+(def ^:private utility-buildings
+  #{:small-warehouse :large-warehouse :hacienda :construction-hut :hospice
+    :small-market :large-market :office :factory :university :harbor :wharf})
+
+(defn best-mayor-placement
+  "Pick the best destination for one colonist from hand. Returns move args
+   [:place-colonist kind key] or nil when nothing is placeable."
+  [player]
+  (let [{:keys [plantations buildings]} (rules/placement-destinations player)
+        owned-plantation-types (set (map :type (:plantations player)))
+        score-building (fn [b]
+                         (let [good (get-in state/buildings [b :good])]
+                           (cond
+                             ;; production building with matching raw material
+                             (and good (contains? owned-plantation-types good)) 100
+                             (contains? utility-buildings b) 90
+                             good 50
+                             :else 30)))
+        score-plantation (fn [p]
+                           (case p
+                             :quarry 80
+                             :corn 70
+                             ;; matching production building makes the field useful
+                             (if (some #(= (get-in state/buildings [(:type %) :good]) p)
+                                       (:buildings player))
+                               60
+                               35)))
+        candidates (concat
+                    (map (fn [b] [[:place-colonist :building b] (score-building b)]) buildings)
+                    (map (fn [p] [[:place-colonist :plantation p] (score-plantation p)]) plantations))]
+    (when (and (pos? (:colonists-in-hand player)) (seq candidates))
+      (first (apply max-key second candidates)))))
+
+(defn best-storage-pick
+  "Warehouse slots go to the biggest piles; the windrose single to the most
+   valuable remaining good. Returns move args or nil when done."
+  [game-state player-idx]
+  (let [player (get-in game-state [:players player-idx])
+        {:keys [kinds singles]} (rules/legal-storage-picks game-state player-idx)]
+    (cond
+      (seq kinds) [:store-kind (apply max-key
+                                      (fn [g] (+ (* 100 (get-in player [:goods g] 0))
+                                                 (get rules/good-values g 0)))
+                                      (vec kinds))]
+      (seq singles) [:store-single (apply max-key #(get rules/good-values % 0) (vec singles))]
+      :else nil)))
+
+;; ================================================================================
 ;; Main AI Decision Function
 ;; ================================================================================
 
@@ -331,20 +382,25 @@
           (select-best-trade game-state player tradeable-goods))
 
         :captain
-        (let [shippable-goods (filter #(and (pos? (get-in player [:goods %] 0))
-                                            (rules/find-ship-for-good (:ships game-state) %
-                                                                      (get-in player [:goods %] 0)))
-                                      (keys (:goods-supply game-state)))]
-          (if (seq shippable-goods)
-            (select-best-shipping game-state player shippable-goods)
-            ;; No cargo ship can take anything - use the wharf if we have one
-            (when (rules/can-use-wharf? game-state player-idx)
-              (let [best-good (->> (:goods player)
-                                   (filter #(pos? (second %)))
-                                   (sort-by second)
-                                   last
-                                   first)]
-                [best-good :wharf]))))
+        (if (:storage-phase game-state)
+          (best-storage-pick game-state player-idx)
+          (let [shippable-goods (filter #(and (pos? (get-in player [:goods %] 0))
+                                              (rules/find-ship-for-good (:ships game-state) %
+                                                                        (get-in player [:goods %] 0)))
+                                        (keys (:goods-supply game-state)))]
+            (if (seq shippable-goods)
+              (select-best-shipping game-state player shippable-goods)
+              ;; No cargo ship can take anything - use the wharf if we have one
+              (when (rules/can-use-wharf? game-state player-idx)
+                (let [best-good (->> (:goods player)
+                                     (filter #(pos? (second %)))
+                                     (sort-by second)
+                                     last
+                                     first)]
+                  [best-good :wharf])))))
+
+        :mayor
+        (best-mayor-placement player)
 
         ;; For roles with no choices
         :execute))

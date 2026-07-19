@@ -14,6 +14,8 @@
 
 (def good-order [:corn :indigo :sugar :tobacco :coffee])
 
+(def good-order-index (into {} (map-indexed (fn [i g] [g i]) good-order)))
+
 (def plantation-order [:corn :indigo :sugar :tobacco :coffee :quarry])
 
 (def building-order
@@ -41,8 +43,16 @@
     (map (fn [g] {:kind :ship :good g}) good-order)
     ;; 48-52: captain - wharf all goods of one kind
     (map (fn [g] {:kind :wharf :good g}) good-order)
-    ;; 53: pass / execute-with-no-choice (mayor, craftsman, prospector, skips)
-    [{:kind :pass}])))
+    ;; 53: pass / done / execute-with-no-choice
+    [{:kind :pass}]
+    ;; 54-59: mayor - place a colonist on a plantation/quarry of a type
+    (map (fn [p] {:kind :place-plantation :plantation p}) plantation-order)
+    ;; 60-82: mayor - place a colonist on a building
+    (map (fn [b] {:kind :place-building :building b}) building-order)
+    ;; 83-87: storage - keep all goods of one kind (warehouse slot)
+    (map (fn [g] {:kind :store-kind :good g}) good-order)
+    ;; 88-92: storage - keep one single good on the windrose
+    (map (fn [g] {:kind :store-single :good g}) good-order))))
 
 (def num-actions (count action-table))
 
@@ -104,21 +114,43 @@
           (vec (concat trades [pass-id])))
 
         :captain
-        (let [ships (map #(action-id {:kind :ship :good %})
-                         (filter #(and (pos? (get-in player [:goods %] 0))
-                                       (rules/find-ship-for-good (:ships game-state) %
-                                                                 (get-in player [:goods %] 0)))
-                                 good-order))
-              wharfs (when (rules/can-use-wharf? game-state player-idx)
-                       (map #(action-id {:kind :wharf :good %})
-                            (filter #(pos? (get-in player [:goods %] 0)) good-order)))]
-          ;; Loading on a cargo ship is mandatory when possible; the wharf may
-          ;; substitute. Passing is only legal when no cargo-ship load exists.
-          (if (seq ships)
-            (vec (concat ships wharfs))
-            (vec (concat wharfs [pass-id]))))
+        (if (:storage-phase game-state)
+          ;; Storage sub-phase: keep kinds / a single, or done (always legal)
+          (let [{:keys [kinds singles]} (rules/legal-storage-picks game-state player-idx)]
+            (vec (concat (map #(action-id {:kind :store-kind :good %}) (sort-by good-order-index kinds))
+                         (map #(action-id {:kind :store-single :good %}) (sort-by good-order-index singles))
+                         [pass-id])))
+          ;; Loading turns
+          (let [ships (map #(action-id {:kind :ship :good %})
+                           (filter #(and (pos? (get-in player [:goods %] 0))
+                                         (rules/find-ship-for-good (:ships game-state) %
+                                                                   (get-in player [:goods %] 0)))
+                                   good-order))
+                wharfs (when (rules/can-use-wharf? game-state player-idx)
+                         (map #(action-id {:kind :wharf :good %})
+                              (filter #(pos? (get-in player [:goods %] 0)) good-order)))]
+            ;; Loading on a cargo ship is mandatory when possible; the wharf may
+            ;; substitute. Passing is only legal when no cargo-ship load exists.
+            (if (seq ships)
+              (vec (concat ships wharfs))
+              (vec (concat wharfs [pass-id])))))
 
-        ;; Mayor / craftsman / prospector have no choices
+        :mayor
+        ;; Placement turns: place from hand until it's empty or nothing is
+        ;; placeable; only then is "done" legal
+        (let [{:keys [plantations buildings]} (rules/placement-destinations player)
+              hand (:colonists-in-hand player)
+              places (when (pos? hand)
+                       (concat
+                        (map #(action-id {:kind :place-plantation :plantation %})
+                             (filter plantations plantation-order))
+                        (map #(action-id {:kind :place-building :building %})
+                             (filter buildings building-order))))]
+          (if (seq places)
+            (vec places)
+            [pass-id]))
+
+        ;; Craftsman / prospector have no choices
         [pass-id]))
 
     :else []))
@@ -142,6 +174,14 @@
              :args [good]}
       :wharf {:type :role-action :role :captain :player-id player-id
               :args [good :wharf]}
+      :place-plantation {:type :role-action :role :mayor :player-id player-id
+                         :args [:place-colonist :plantation plantation]}
+      :place-building {:type :role-action :role :mayor :player-id player-id
+                       :args [:place-colonist :building building]}
+      :store-kind {:type :role-action :role :captain :player-id player-id
+                   :args [:store-kind good]}
+      :store-single {:type :role-action :role :captain :player-id player-id
+                     :args [:store-single good]}
       :pass {:type :role-action :role (:selected-role game-state)
              :player-id player-id :args []})))
 

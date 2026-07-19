@@ -35,6 +35,7 @@
         (conj (norm (:victory-points player) 60))
         (into (map #(norm (get-in player [:goods %]) 8) actions/good-order))
         (conj (norm (:san-juan-colonists player) 10))
+        (conj (norm (:colonists-in-hand player) 15))
         ;; 6 plantation types x [count owned, count manned]
         (into (mapcat (fn [ptype]
                         (let [tiles (filter #(= (:type %) ptype) plantations)]
@@ -59,21 +60,25 @@
   (mod (- idx actor-idx) n))
 
 (defn- encode-global [game-state actor-idx n]
-  (let [phase-key (if (= (:phase game-state) :role-selection)
-                    :selecting
-                    (case (:selected-role game-state)
-                      :settler :settler
-                      :builder :builder
-                      :trader :trader
-                      :captain :captain
-                      :other))
+  (let [phase-key (cond
+                    (= (:phase game-state) :role-selection) :selecting
+                    (:storage-phase game-state) :storage
+                    :else (case (:selected-role game-state)
+                            :settler :settler
+                            :builder :builder
+                            :trader :trader
+                            :captain :captain
+                            :mayor :mayor
+                            :other))
         selector-offset (when-let [s (:role-selector-idx game-state)]
                           (seat-offset actor-idx s n))
-        actor (nth (:players game-state) actor-idx)]
+        actor (nth (:players game-state) actor-idx)
+        storage-picks (get-in game-state [:storage-picks actor-idx])]
     (-> []
         (conj (norm (:round game-state) 20))
-        ;; decision type one-hot (6)
-        (into (one-hot 6 ({:selecting 0 :settler 1 :builder 2 :trader 3 :captain 4 :other 5}
+        ;; decision type one-hot (8)
+        (into (one-hot 8 ({:selecting 0 :settler 1 :builder 2 :trader 3
+                           :captain 4 :mayor 5 :storage 6 :other 7}
                           phase-key)))
         ;; 8 role slots x [in this game?, available?, gold]
         (into (mapcat (fn [r]
@@ -117,7 +122,13 @@
                                             (mod (+ actor-idx k) n))))
                    (range n)))
         ;; actor's hacienda flag
-        (conj (flag (get-in game-state [:hacienda-used actor-idx]))))))
+        (conj (flag (get-in game-state [:hacienda-used actor-idx])))
+        ;; actor's storage picks so far (kinds kept + windrose single)
+        (into (map (fn [g] (flag (contains? (:kinds storage-picks) g)))
+                   actions/good-order))
+        (into (one-hot 6 (if-let [s (:single storage-picks)]
+                           (inc (good-index s))
+                           0))))))
 
 ;; --------------------------------------------------------------------------
 ;; Public API
@@ -137,10 +148,10 @@
         (into (encode-global game-state actor-idx n)))))
 
 (defn encoded-size
-  "Input width for a game with n players (3 players: 316)"
+  "Input width for a game with n players (3 players: 322)"
   [n]
-  (+ (* 66 n)          ;; per-player blocks
-     1 6 24            ;; round, decision type, role slots
+  (+ (* 67 n)          ;; per-player blocks
+     1 8 24            ;; round, decision type, role slots
      n (inc n)         ;; governor + selector offsets
      5 1 1 1           ;; plantation display
      3                 ;; colonist ship/supply, VP supply
@@ -148,4 +159,5 @@
      6                 ;; trading house
      24                ;; ships
      1 1 n             ;; captain flags
-     1))               ;; hacienda flag
+     1                 ;; hacienda flag
+     5 6))             ;; storage picks (kinds + single)

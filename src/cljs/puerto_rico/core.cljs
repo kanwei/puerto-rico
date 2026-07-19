@@ -1,5 +1,6 @@
 (ns puerto-rico.core
   (:require [clojure.string :as str]
+            [cljs.reader :as reader]
             [reagent.core :as reagent]
             [reagent.dom.client :as rdc]
             [puerto-rico.game.state :as state]
@@ -7,8 +8,13 @@
             [puerto-rico.ai.heuristic :as ai]
             [puerto-rico.ai.personalities :as personalities]))
 
-;; Forward declaration for function used before definition
-(declare handle-automatic-role-execution)
+;; Forward declarations for functions used before definition
+(declare handle-automatic-role-execution check-ai-turn!)
+
+;; Backend that computes AI moves with MCTS. When it is unreachable the game
+;; falls back to the local heuristic AI so it still works standalone.
+(def api-base "http://localhost:8080")
+(def mcts-simulations 200)
 
 ;; Simple game state atom for demo
 (defonce game-state (reagent/atom {:game-state nil}))
@@ -70,34 +76,20 @@
   (reset! game-log []))
 
 ;; Initialize a real game with players
+;; (AI players are driven by backend MCTS - no personalities anymore)
 (defn create-new-game []
   (clear-log)
   (let [players [(state/new-player 1 "Alice (Human)")
-                 (let [personality (personalities/assign-random-personality)]
-                   (-> (state/new-player 2 "Bob")
-                       (assoc :is-ai true)
-                       (assoc :personality personality)))
-                 (let [personality (personalities/assign-random-personality)]
-                   (-> (state/new-player 3 "Carol")
-                       (assoc :is-ai true)
-                       (assoc :personality personality)))]]
+                 (assoc (state/new-player 2 "Bob") :is-ai true)
+                 (assoc (state/new-player 3 "Carol") :is-ai true)]]
     (add-log-entry "New game started with 3 players")
     (state/new-game-state players)))
 
 (defn create-ai-only-game []
   (clear-log)
-  (let [players [(let [personality (personalities/assign-random-personality)]
-                   (-> (state/new-player 1 "Alice")
-                       (assoc :is-ai true)
-                       (assoc :personality personality)))
-                 (let [personality (personalities/assign-random-personality)]
-                   (-> (state/new-player 2 "Bob")
-                       (assoc :is-ai true)
-                       (assoc :personality personality)))
-                 (let [personality (personalities/assign-random-personality)]
-                   (-> (state/new-player 3 "Carol")
-                       (assoc :is-ai true)
-                       (assoc :personality personality)))]]
+  (let [players [(assoc (state/new-player 1 "Alice") :is-ai true)
+                 (assoc (state/new-player 2 "Bob") :is-ai true)
+                 (assoc (state/new-player 3 "Carol") :is-ai true)]]
     (add-log-entry "New AI-only game started with 3 players")
     (state/new-game-state players)))
 
@@ -131,7 +123,8 @@
         (swap! game-state assoc :game-state new-game-state)
 
         ;; Auto-execute roles that don't require player choices
-        (when (contains? #{:mayor :craftsman :prospector :prospector-2} role)
+        ;; (the mayor now has placement decisions, so it is NOT auto-executed)
+        (when (contains? #{:craftsman :prospector :prospector-2} role)
           (handle-automatic-role-execution new-game-state))
 
         (js/console.log "Role selected:" role "New game state:" new-game-state)))))
@@ -268,20 +261,17 @@
             (js/console.log "Player skipped role:" role "for player:" (:name executor-player))))))))
 
 (defn handle-automatic-role-execution [game-data]
-  "Automatically execute roles that don't require choices. Mayor and craftsman
-   execute once for the whole table; the prospector only affects the selector -
-   all three end the role immediately."
+  "Automatically execute roles that don't require choices. The craftsman
+   executes once for the whole table; the prospector only affects the
+   selector - both end the role immediately."
   (let [current-role (:selected-role game-data)
         executor (current-role-executor game-data)]
     (case current-role
-      (:mayor :craftsman)
-      (if (= (:role-execution-current-idx game-data) (:role-selector-idx game-data))
-        (swap! game-state assoc :game-state
-               (-> game-data
-                   (rules/execute-role current-role nil)
-                   (rules/end-role-execution)))
-        ;; Shouldn't happen (these roles end right after the selector executes)
-        (swap! game-state update :game-state rules/advance-role-execution))
+      :craftsman
+      (swap! game-state assoc :game-state
+             (-> game-data
+                 (rules/execute-role current-role nil)
+                 (rules/end-role-execution)))
 
       (:prospector :prospector-2)
       (swap! game-state assoc :game-state
@@ -292,295 +282,186 @@
       ;; Other roles require player choices
       nil)))
 
-;; Game state watcher for AI turns
-(defn execute-ai-turn-async [game-data]
-  "Execute AI turn with visual feedback and heuristic decision-making"
+;; --------------------------------------------------------------------------
+;; Mayor placement (human)
+;; --------------------------------------------------------------------------
+
+(defn handle-mayor-place [dest-kind dest-key]
+  (let [current-game (:game-state @game-state)
+        executor (current-role-executor current-game)]
+    (when executor
+      (swap! game-state assoc :game-state
+             (rules/apply-move current-game
+                               {:type :role-action :role :mayor
+                                :player-id (:id executor)
+                                :args [:place-colonist dest-kind dest-key]})))))
+
+(defn handle-mayor-done []
+  (let [current-game (:game-state @game-state)
+        executor (current-role-executor current-game)]
+    (when executor
+      (when-not (:is-ai executor)
+        (add-log-entry "👷 Done placing colonists" (:name executor)))
+      (swap! game-state assoc :game-state
+             (rules/apply-move current-game
+                               {:type :role-action :role :mayor
+                                :player-id (:id executor) :args []})))))
+
+(defn handle-mayor-auto-place
+  "Place all remaining colonists with the heuristic, then finish the turn"
+  []
+  (let [current-game (:game-state @game-state)
+        executor-idx (:role-execution-current-idx current-game)
+        executor (current-role-executor current-game)
+        pid (:id executor)]
+    (when executor
+      (let [placed (loop [gs current-game, n 0]
+                     (if-let [args (and (< n 40)
+                                        (ai/best-mayor-placement (nth (:players gs) executor-idx)))]
+                       (recur (rules/apply-move gs {:type :role-action :role :mayor
+                                                    :player-id pid :args args})
+                              (inc n))
+                       gs))]
+        (when-not (:is-ai executor)
+          (add-log-entry "👷 Auto-placed colonists" (:name executor)))
+        (swap! game-state assoc :game-state
+               (rules/apply-move placed {:type :role-action :role :mayor
+                                         :player-id pid :args []}))))))
+
+;; --------------------------------------------------------------------------
+;; Captain storage (human)
+;; --------------------------------------------------------------------------
+
+(defn handle-storage-pick [op good]
+  (let [current-game (:game-state @game-state)
+        executor (current-role-executor current-game)]
+    (when executor
+      (when-not (:is-ai executor)
+        (add-log-entry (str "📦 Kept " (if (= op :store-kind) "all " "one ") (name good))
+                       (:name executor)))
+      (swap! game-state assoc :game-state
+             (rules/apply-move current-game
+                               {:type :role-action :role :captain
+                                :player-id (:id executor)
+                                :args [op good]})))))
+
+(defn handle-storage-done []
+  (let [current-game (:game-state @game-state)
+        executor (current-role-executor current-game)]
+    (when executor
+      (when-not (:is-ai executor)
+        (add-log-entry "📦 Done storing (rest discarded)" (:name executor)))
+      (swap! game-state assoc :game-state
+             (rules/apply-move current-game
+                               {:type :role-action :role :captain
+                                :player-id (:id executor) :args []})))))
+
+;; --------------------------------------------------------------------------
+;; AI turns: computed on the backend with MCTS, applied locally.
+;; Falls back to the local heuristic AI when the backend is unreachable.
+;; --------------------------------------------------------------------------
+
+(defn describe-move
+  "Human-readable log line for an engine move"
+  [game-data move]
+  (let [args (:args move)
+        pretty #(str/replace (name %) "-" " ")]
+    (case (:type move)
+      :select-role
+      (let [gold (get-in game-data [:role-gold (:role move)] 0)]
+        (str "🎭 Selected " (role-display-name (:role move)) " role"
+             (when (pos? gold) (str " (+" gold " gold)"))))
+
+      :role-action
+      (case (:role move)
+        :settler (cond
+                   (empty? args) "🚫 Skipped settler"
+                   (= (first args) :random-from-deck) "🏛️ Used Hacienda (drew a tile)"
+                   :else (str "🌱 Took " (name (first args))))
+        :builder (if (empty? args)
+                   "🔨 Skipped building"
+                   (str "🏗️ Built " (pretty (first args))))
+        :trader (if (empty? args)
+                  "💼 Skipped trading"
+                  (str "💰 Sold " (name (first args))))
+        :mayor (if (empty? args)
+                 "👷 Done placing colonists"
+                 (str "👷 Placed colonist on " (pretty (nth args 2))))
+        :captain (cond
+                   (= (first args) :store-kind) (str "📦 Kept all " (name (second args)))
+                   (= (first args) :store-single) (str "📦 Kept one " (name (second args)))
+                   (empty? args) (if (:storage-phase game-data)
+                                   "📦 Done storing"
+                                   "⛵ Passed shipping")
+                   (= (second args) :wharf) (str "⚓ Wharf-shipped all " (name (first args)))
+                   :else (str "🚢 Shipped " (name (first args))))
+        :craftsman "⚒️ Produced goods (all players)"
+        (:prospector :prospector-2) "💰 Prospector: +1 doubloon"
+        "⏭️ Acted")
+      "⏭️ Acted")))
+
+(defn- heuristic-fallback-move [game-data]
+  (let [actor (if (= (:phase game-data) :role-execution)
+                (current-role-executor game-data)
+                (current-player game-data))]
+    (ai/ai-select-move game-data (:id actor))))
+
+(defn- fetch-backend-move
+  "POST the game state to the backend; calls back with the MCTS move or nil"
+  [game-data callback]
+  (-> (js/fetch (str api-base "/api/ai-move")
+                (clj->js {:method "POST"
+                          :headers {"Content-Type" "application/edn"}
+                          :body (pr-str {:game-state game-data
+                                         :simulations mcts-simulations})}))
+      (.then (fn [resp]
+               (if (.-ok resp)
+                 (.text resp)
+                 (throw (js/Error. (str "HTTP " (.-status resp)))))))
+      (.then (fn [text] (callback (:move (reader/read-string text)))))
+      (.catch (fn [err]
+                (js/console.warn "Backend AI unavailable, using local heuristic:" err)
+                (callback nil)))))
+
+(defn execute-ai-turn-async
+  "One AI decision: ask the backend for an MCTS move (heuristic fallback),
+   then apply it through the engine"
+  [game-data]
   (let [ai-player (if (= (:phase game-data) :role-execution)
                     (current-role-executor game-data)
                     (when (:is-ai (current-player game-data)) (current-player game-data)))]
     (when ai-player
-      (case (:phase game-data)
-        :role-selection
-        (let [available-roles (:available-roles game-data)
-              player-id (:id ai-player)
-              personality (:personality ai-player)
-              personality-fns (personalities/get-personality-functions personality)
-              role-weights ((:role-weights personality-fns) game-data player-id)
-              ;; Combine heuristic evaluation with personality weights
-              role-scores (map (fn [role]
-                                 (let [heuristic-score (ai/evaluate-role-utility game-data player-id role)
-                                       personality-weight (get role-weights role 50)]
-                                   [role (* heuristic-score (/ personality-weight 50))]))
-                               available-roles)
-              sorted-scores (sort-by second > role-scores)
-              best-role (first (first sorted-scores))
-              best-score (second (first sorted-scores))]
-          ;; Log decision process to console
-          (js/console.log "=== AI Role Selection ===" (:name ai-player)
-                          "(" (personalities/personality-name personality) ")")
-          (js/console.log "Available roles and scores:")
-          (doseq [[role score] sorted-scores]
-            (js/console.log (str "  " (name role) ": " score)))
-          (js/console.log (str "Selected: " (name best-role) " (score: " best-score ")"))
-
-          ;; Update display and execute selection
-          (reset! ai-action-display {:show   true :player (:name ai-player)
-                                     :action (str "🎭 Selected " (role-display-name best-role) " role")})
-          (let [gold-on-role (get-in game-data [:role-gold best-role] 0)
-                role-msg (if (> gold-on-role 0)
-                           (str "🎭 Selected " (role-display-name best-role) " role (+" gold-on-role " gold, score: " (Math/round best-score) ")")
-                           (str "🎭 Selected " (role-display-name best-role) " role (score: " (Math/round best-score) ")"))]
-            (add-log-entry role-msg (:name ai-player))
-            (when (contains? #{:prospector :prospector-2} best-role)
-              (add-log-entry (str "💰 Gained 1 doubloon from Prospector") (:name ai-player))))
-          (js/setTimeout #(do
-                            (reset! ai-action-display {:show false :player "" :action ""})
-                            (handle-role-selection best-role)) 250))
-
-        :role-execution
-        (let [selected-role (:selected-role game-data)
-              executor-player (current-role-executor game-data)]
-          (case selected-role
-            :settler
-            (let [current-player-idx (:role-execution-current-idx game-data)
-                  has-hacienda (state/has-occupied-building? executor-player :hacienda)
-                  hacienda-used (get-in game-data [:hacienda-used current-player-idx] false)
-                  personality (:personality executor-player)
-                  personality-fns (personalities/get-personality-functions personality)
-                  plantation-score-fn (:plantation-score personality-fns)
-                  wants-hacienda? (and has-hacienda (not hacienda-used)
-                                       (seq (:plantation-supply game-data))
-                                       (not (rules/island-full? executor-player))
-                                       (or (= personality :builder) (> (rand) 0.2)))
-                  ;; Guard against watcher re-entry before any async work
-                  _ (reset! ai-action-display {:show true :player (:name executor-player)
-                                               :action "🌱 Choosing a plantation..."})
-                  ;; Hacienda bonus draw happens synchronously, before the regular take
-                  game-after-hacienda
-                  (if wants-hacienda?
-                    (let [updated-game (-> (rules/execute-role game-data :settler (:id executor-player) :random-from-deck)
-                                           (assoc-in [:hacienda-used current-player-idx] true))
-                          drawn-type (-> updated-game :players (nth current-player-idx) :plantations last :type)]
-                      (swap! game-state assoc :game-state updated-game)
-                      (add-log-entry (str "🏛️ Used Hacienda - drew " (name drawn-type)) (:name executor-player))
-                      updated-game)
-                    game-data)
-                  executor-now (nth (:players game-after-hacienda) current-player-idx)
-                  can-take-quarry (and (pos? (:quarry-supply game-after-hacienda))
-                                       (rules/may-take-quarry? game-after-hacienda current-player-idx))
-                  available-choices (when-not (rules/island-full? executor-now)
-                                      (concat (distinct (:face-up-plantations game-after-hacienda))
-                                              (when can-take-quarry [:quarry])))]
-              (if (seq available-choices)
-                (let [;; Combine heuristic evaluation with personality scoring
-                      plantation-scores (map (fn [p]
-                                               (let [heuristic-score (ai/evaluate-plantation-value game-after-hacienda executor-now p)
-                                                     personality-score (plantation-score-fn game-after-hacienda executor-now p)]
-                                                 [p (* heuristic-score (/ personality-score 50))]))
-                                             available-choices)
-                      sorted-scores (sort-by second > plantation-scores)
-                      best-choice (first (first sorted-scores))
-                      best-score (second (first sorted-scores))]
-                  ;; Log decision
-                  (js/console.log "=== AI Plantation Selection ===" (:name executor-player)
-                                  "(" (personalities/personality-name personality) ")")
-                  (doseq [[p score] sorted-scores]
-                    (js/console.log (str "  " (name p) ": " score)))
-                  (js/console.log (str "Selected: " (name best-choice) " (score: " best-score ")"))
-
-                  (reset! ai-action-display {:show   true :player (:name executor-player)
-                                             :action (str "🌱 Took " (name best-choice) " plantation")})
-                  (add-log-entry (str "🌱 Took " (name best-choice) " plantation (score: " (Math/round best-score) ")") (:name executor-player))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-plantation-choice best-choice)) 250))
-                (do
-                  (add-log-entry "🚫 Skipped settler (island full)" (:name executor-player))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-skip-role :settler)) 250))))
-
-            :builder
-            (let [personality (:personality executor-player)
-                  personality-fns (personalities/get-personality-functions personality)
-                  building-score-fn (:building-score personality-fns)
-                  ;; Same legality check the engine uses (discounts, supply, city space)
-                  affordable-buildings (filter #(rules/can-build-building? game-data executor-player %)
-                                               (keys state/buildings))]
-              (if (seq affordable-buildings)
-                (let [;; Combine heuristic evaluation with personality scoring
-                      building-scores (map (fn [building-key]
-                                             (let [building-info (get state/buildings building-key)
-                                                   heuristic-score (ai/evaluate-building-synergy game-data executor-player
-                                                                                                 building-key building-info)
-                                                   personality-score (building-score-fn game-data executor-player
-                                                                                        building-key building-info)]
-                                               [building-key (* heuristic-score (/ personality-score 50))]))
-                                           affordable-buildings)
-                      sorted-scores (sort-by second > building-scores)
-                      best-building (first (first sorted-scores))
-                      best-score (second (first sorted-scores))
-                      building-name (-> best-building name (str/replace "-" " "))]
-                  ;; Log decision
-                  (js/console.log "=== AI Building Selection ===" (:name executor-player)
-                                  "(" (personalities/personality-name personality) ")")
-                  (doseq [[b score] sorted-scores]
-                    (js/console.log (str "  " (name b) ": " score)))
-                  (js/console.log (str "Selected: " (name best-building) " (score: " best-score ")"))
-
-                  ;; Actual cost as the engine will charge it
-                  (let [base-cost (get-in state/buildings [best-building :cost])
-                        actual-cost (rules/building-cost game-data executor-player best-building)
-                        discount (- base-cost actual-cost)
-                        cost-msg (if (> discount 0)
-                                   (str " for $" actual-cost " (was $" base-cost ", -" discount " discount)")
-                                   (str " for $" actual-cost))]
-                    (reset! ai-action-display {:show   true :player (:name executor-player)
-                                               :action (str "🏗️ Built " building-name)})
-                    (add-log-entry (str "🏗️ Built " building-name cost-msg " (score: " (Math/round best-score) ")") (:name executor-player)))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-building-choice best-building)) 250))
-                (do
-                  (reset! ai-action-display {:show true :player (:name executor-player) :action "Skipped building (can't afford)"})
-                  (add-log-entry "Skipped building (can't afford)" (:name executor-player))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-skip-role :builder)) 250))))
-
-            :trader
-            (let [tradeable-goods (filter #(rules/can-trade-good? game-data executor-player %)
-                                          [:corn :indigo :sugar :tobacco :coffee])
-                  personality (:personality executor-player)
-                  personality-fns (personalities/get-personality-functions personality)
-                  trade-multiplier (:trade-multiplier personality-fns)]
-              (if (seq tradeable-goods)
-                (let [;; Combine heuristic evaluation with personality multiplier
-                      trade-scores (map (fn [good]
-                                          (let [base-value (ai/evaluate-trade-value game-data executor-player good)]
-                                            [good (* base-value trade-multiplier)]))
-                                        tradeable-goods)
-                      sorted-scores (sort-by second > trade-scores)
-                      best-good (first (first sorted-scores))
-                      best-score (second (first sorted-scores))]
-                  ;; Log decision
-                  (js/console.log "=== AI Trade Selection ===" (:name executor-player)
-                                  "(" (personalities/personality-name personality) ")")
-                  (doseq [[g score] sorted-scores]
-                    (js/console.log (str "  " (name g) ": " score)))
-                  (js/console.log (str "Selected: " (name best-good) " (score: " best-score ")"))
-
-                  (reset! ai-action-display {:show   true :player (:name executor-player)
-                                             :action (str "💰 Sold " (name best-good))})
-                  ;; Trade value as the engine pays it: base + markets + privilege
-                  (let [base-value (get rules/good-values best-good 0)
-                        market-bonus (+ (if (rules/has-occupied-building? executor-player :small-market) 1 0)
-                                        (if (rules/has-occupied-building? executor-player :large-market) 2 0))
-                        privilege-bonus (if (= (:role-execution-current-idx game-data)
-                                               (:role-selector-idx game-data))
-                                          1 0)
-                        total-value (+ base-value market-bonus privilege-bonus)]
-                    (add-log-entry (str "💰 Sold " (name best-good) " for " total-value " doubloons (score: " (Math/round best-score) ")") (:name executor-player)))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-good-choice best-good :trader)) 250))
-                (do
-                  (reset! ai-action-display {:show true :player (:name executor-player) :action "Skipped trading (no goods)"})
-                  (add-log-entry "Skipped trading (no goods)" (:name executor-player))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-skip-role :trader)) 250))))
-
-            :captain
-            (let [executor-idx (:role-execution-current-idx game-data)
-                  ;; Goods that can actually be loaded on a cargo ship
-                  shippable-goods (filter #(and (pos? (get-in executor-player [:goods %] 0))
-                                                (rules/find-ship-for-good (:ships game-data) %
-                                                                          (get-in executor-player [:goods %] 0)))
-                                          [:corn :indigo :sugar :tobacco :coffee])
-                  personality (:personality executor-player)
-                  personality-fns (personalities/get-personality-functions personality)
-                  ship-multiplier (:ship-multiplier personality-fns)]
-              (cond
-                (seq shippable-goods)
-                (let [;; Combine heuristic evaluation with personality multiplier
-                      ship-scores (map (fn [good]
-                                         (let [base-value (ai/evaluate-shipping-option game-data executor-player good)]
-                                           [good (* base-value ship-multiplier)]))
-                                       shippable-goods)
-                      sorted-scores (sort-by second > ship-scores)
-                      best-good (first (first sorted-scores))
-                      best-score (second (first sorted-scores))
-                      [_ ship] (rules/find-ship-for-good (:ships game-data) best-good
-                                                         (get-in executor-player [:goods best-good] 0))
-                      loadable (min (get-in executor-player [:goods best-good] 0)
-                                    (- (:capacity ship) (:amount ship)))]
-                  ;; Log decision
-                  (js/console.log "=== AI Shipping Selection ===" (:name executor-player)
-                                  "(" (personalities/personality-name personality) ")")
-                  (doseq [[g score] sorted-scores]
-                    (js/console.log (str "  " (name g) ": " score)))
-                  (js/console.log (str "Selected: " (name best-good) " (score: " best-score ")"))
-
-                  (reset! ai-action-display {:show   true :player (:name executor-player)
-                                             :action (str "🚢 Shipped " (name best-good))})
-                  (add-log-entry (str "🚢 Shipped " loadable " " (name best-good) " (score: " (Math/round best-score) ")") (:name executor-player))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-good-choice best-good :captain)) 250))
-
-                ;; No cargo ship can take anything - use the wharf if available
-                (rules/can-use-wharf? game-data executor-idx)
-                (let [best-good (->> (:goods executor-player)
-                                     (filter #(pos? (second %)))
-                                     (sort-by second)
-                                     last
-                                     first)
-                      amount (get-in executor-player [:goods best-good] 0)]
-                  (reset! ai-action-display {:show true :player (:name executor-player)
-                                             :action (str "⚓ Wharf-shipped " (name best-good))})
-                  (add-log-entry (str "⚓ Wharf-shipped " amount " " (name best-good)) (:name executor-player))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-wharf-choice best-good)) 250))
-
-                :else
-                (do
-                  (reset! ai-action-display {:show true :player (:name executor-player) :action "⛵ Skipped shipping (no goods)"})
-                  (add-log-entry "⛵ Skipped shipping (no goods)" (:name executor-player))
-                  (js/setTimeout #(do
-                                    (reset! ai-action-display {:show false :player "" :action ""})
-                                    (handle-skip-role :captain)) 250))))
-
-            (:prospector :prospector-2)
-            ;; Prospector auto-executes - only selector gets 1 gold
-            (let [is-selector (= (:role-execution-current-idx game-data) (:role-selector-idx game-data))]
-              (when is-selector
-                (reset! ai-action-display {:show   true :player (:name executor-player)
-                                           :action "💰 Gained 1 doubloon from Prospector"}))
-              ;; Don't log here - already logged when role was selected
-              (js/setTimeout #(do
-                                (reset! ai-action-display {:show false :player "" :action ""})
-                                (handle-automatic-role-execution game-data)) 250))
-
-            (:mayor :craftsman)
-            ;; These roles execute for all players at once, only when role selector
-            (if (= (:role-execution-current-idx game-data) (:role-selector-idx game-data))
-              (do
-                (reset! ai-action-display {:show true :player (:name executor-player) :action (str "Executed " (name selected-role))})
-                (add-log-entry (str "Executed " (name selected-role) " for all players") (:name executor-player))
-                (js/setTimeout #(do
-                                  (reset! ai-action-display {:show false :player "" :action ""})
-                                  (swap! game-state update :game-state
-                                         (fn [gd]
-                                           (when gd
-                                             (-> (rules/execute-role gd selected-role (:id executor-player))
-                                                 (rules/end-role-execution)))))) 250))
-              ;; Not role selector - advance synchronously (shouldn't happen: these
-              ;; roles end right after the selector executes)
-              (swap! game-state update :game-state rules/advance-role-execution))
-
-            nil))))))
+      ;; guard against re-entry while the request is in flight
+      (reset! ai-action-display {:show true :player (:name ai-player)
+                                 :action "🤖 Thinking (MCTS)..."})
+      (reagent/flush)
+      (fetch-backend-move
+       game-data
+       (fn [backend-move]
+         (let [current (:game-state @game-state)]
+           (if (not= current game-data)
+             ;; the game moved on while we were thinking - drop the stale move
+             ;; and re-kick the driver (its watch already fired and was skipped)
+             (do (reset! ai-action-display {:show false :player "" :action ""})
+                 (js/setTimeout check-ai-turn! 50))
+             (let [move (or backend-move (heuristic-fallback-move game-data))]
+               (if (and move (rules/valid-move? current (:player-id move) move))
+                 (let [description (str (describe-move current move)
+                                        (when-not backend-move " (local)"))]
+                   (add-log-entry description (:name ai-player))
+                   (reset! ai-action-display {:show true :player (:name ai-player)
+                                              :action description})
+                   ;; reagent batches re-renders on requestAnimationFrame, which
+                   ;; may be throttled outside user events - flush explicitly
+                   (reagent/flush)
+                   (js/setTimeout
+                    #(do (reset! ai-action-display {:show false :player "" :action ""})
+                         (swap! game-state assoc :game-state (rules/apply-move current move))
+                         (reagent/flush))
+                    150))
+                 (do
+                   (js/console.error "AI produced no valid move:" (pr-str move))
+                   (reset! ai-action-display {:show false :player "" :action ""})))))))))))
 
 (defn ai-turn-needed? [game-data]
   (boolean
@@ -695,24 +576,8 @@
   (let [cost (:cost building-info)
         vp (:vp building-info)
         worker-slots (:worker building-info)
-        building-name (-> building-key name (clojure.string/replace "-" " "))
-        description (or (:description building-info) "")
-        ;; Extract key benefit from description for display
-        benefit (cond
-                  (clojure.string/includes? description "colonist")
-                  "+ 1 colonist for settling (settler phase)"
-                  (clojure.string/includes? description "doubloon")
-                  (let [amount (if (clojure.string/includes? description "extra 2") "2" "1")]
-                    (str "+ " amount " doubloon for trading"))
-                  (clojure.string/includes? description "victory point")
-                  "+ extra victory points"
-                  (and (seq description) (> (count description) 0))
-                  (-> description
-                      (clojure.string/split #"\.")
-                      first
-                      (subs 0 (min 50 (count description))))
-                  :else
-                  "Special building ability")]
+        building-name (-> building-key name (str/replace "-" " "))
+        description (:description building-info)]
     [:div.building-card {:on-click on-click}
      ;; VP in top right corner
      [:div.building-vp vp]
@@ -726,8 +591,9 @@
         ^{:key i}
         [:div.worker-circle])]
 
-     ;; Key benefit
-     [:div.building-benefit benefit]
+     ;; Full ability description (untruncated)
+     (when description
+       [:div.building-benefit description])
 
      ;; Available count
      [:div.building-available (str "Available: " available-count)]
@@ -836,22 +702,95 @@
           [:h3 "Skip"]
           [:p "No goods available"]]]])]))
 
+(defn mayor-placement-ui [game-data]
+  (let [executor (current-role-executor game-data)
+        hand (:colonists-in-hand executor)
+        {:keys [plantations buildings]} (rules/placement-destinations executor)
+        can-place (and (pos? hand) (or (seq plantations) (seq buildings)))]
+    [:div.role-execution
+     [:h2 "👷 Mayor - Place Your Colonists"]
+     [:p "Your board was picked up for re-arrangement. Colonists in hand: "
+      [:strong hand]]
+     (if can-place
+       [:div
+        (when (seq plantations)
+          [:div
+           [:p "🌱 Place on a plantation:"]
+           [:div.choice-grid
+            (for [p (sort plantations)]
+              ^{:key (str "place-p-" (name p))}
+              [:div.choice-card {:on-click #(handle-mayor-place :plantation p)}
+               [:h3 (name p)]])]])
+        (when (seq buildings)
+          [:div
+           [:p "🏢 Place in a building:"]
+           [:div.choice-grid
+            (for [b (sort buildings)]
+              ^{:key (str "place-b-" (name b))}
+              [:div.choice-card {:on-click #(handle-mayor-place :building b)}
+               [:h3 (str/replace (name b) "-" " ")]])]])
+        [:div.choice-grid
+         [:div.choice-card.skip {:on-click handle-mayor-auto-place}
+          [:h3 "Auto-place rest"]
+          [:p "Let the computer finish"]]]]
+       ;; Nothing placeable (hand empty or board full): the turn can end
+       [:div.choice-grid
+        [:div.choice-card.skip {:on-click handle-mayor-done}
+         [:h3 "Done"]
+         [:p (if (pos? hand)
+               (str hand " colonist(s) to San Juan")
+               "Finish placing")]]])]))
+
+(defn storage-choice-ui [game-data]
+  (let [executor-idx (:role-execution-current-idx game-data)
+        executor (current-role-executor game-data)
+        picks (get-in game-data [:storage-picks executor-idx])
+        {:keys [kinds singles]} (rules/legal-storage-picks game-data executor-idx)
+        slots (rules/warehouse-kinds-storable executor)]
+    [:div.role-execution
+     [:h2 "📦 Storage - Choose What to Keep"]
+     [:p "Warehouse kinds: " (count (:kinds picks)) "/" slots
+      " · Windrose single: " (if-let [s (:single picks)] (name s) "none")
+      " - everything else returns to the supply"]
+     (when (seq kinds)
+       [:div
+        [:p "🏬 Keep ALL goods of a kind (warehouse):"]
+        [:div.choice-grid
+         (for [g (sort kinds)]
+           ^{:key (str "kind-" (name g))}
+           [:div.choice-card {:on-click #(handle-storage-pick :store-kind g)}
+            [:h3 (name g)]
+            [:p "Keep all " (get-in executor [:goods g] 0)]])]])
+     (when (seq singles)
+       [:div
+        [:p "🧭 Keep ONE single good (windrose):"]
+        [:div.choice-grid
+         (for [g (sort singles)]
+           ^{:key (str "single-" (name g))}
+           [:div.choice-card {:on-click #(handle-storage-pick :store-single g)}
+            [:h3 (name g)]
+            [:p "Keep 1 of " (get-in executor [:goods g] 0)]])]])
+     [:div.choice-grid
+      [:div.choice-card.skip {:on-click handle-storage-done}
+       [:h3 "Done"]
+       [:p "Discard the rest"]]]]))
+
 (defn role-execution-ui [game-data]
   (let [selected-role (:selected-role game-data)
         executor-player (current-role-executor game-data)]
-    ;; DO NOT auto-execute here - it causes multiple executions on every render
-    ;; Auto-execution should only happen once in handle-ai-turn or handle-role-selection
-
     (case selected-role
       :settler [plantation-choice-ui game-data]
       :builder [building-choice-ui game-data]
       :trader [good-choice-ui game-data :trader]
-      :captain [good-choice-ui game-data :captain]
+      :mayor [mayor-placement-ui game-data]
+      :captain (if (:storage-phase game-data)
+                 [storage-choice-ui game-data]
+                 [good-choice-ui game-data :captain])
       ;; For automatic roles, show status
-      (:mayor :craftsman)
+      :craftsman
       [:div.role-execution
-       [:h2 "🔄 " (name selected-role) " - Executing Automatically"]
-       [:p (:name executor-player) " is executing " (name selected-role) "..."]]
+       [:h2 "🔄 Craftsman - Executing Automatically"]
+       [:p (:name executor-player) " is producing goods..."]]
       ;; Default case
       [:div.role-execution
        [:h2 "Role Execution"]

@@ -1,6 +1,7 @@
 (ns puerto-rico.server
   "HTTP server for Puerto Rico game"
-  (:require [ring.adapter.jetty :refer [run-jetty]]
+  (:require [clojure.edn :as edn]
+            [ring.adapter.jetty :refer [run-jetty]]
             [ring.middleware.json :refer [wrap-json-response wrap-json-body]]
             [ring.middleware.cors :refer [wrap-cors]]
             [reitit.ring :as reitit-ring]
@@ -10,6 +11,7 @@
             [cheshire.core :as json]
             [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]
+            [puerto-rico.ai.actions :as actions]
             [puerto-rico.ai.heuristic :as ai]
             [puerto-rico.ai.mcts :as mcts]))
 
@@ -70,10 +72,29 @@
         {:status 200 :body {:game-state new-game-state :ai-move ai-move}})
       {:status 400 :body {:error "Current player is not AI"}})))
 
+(defn ai-move-handler
+  "Stateless AI endpoint used by the browser game: the client posts the full
+   game state as EDN, the server answers with an MCTS-chosen move for the
+   player who must act. Body: {:game-state <state> :simulations <n optional>}"
+  [request]
+  (try
+    (let [{:keys [game-state simulations]} (edn/read-string (slurp (:body request)))
+          player-id (:id (actions/actor-player game-state))
+          move (mcts/ai-select-move game-state player-id
+                                    {:simulations (or simulations 200)})]
+      {:status 200
+       :headers {"content-type" "application/edn"}
+       :body (pr-str {:move move})})
+    (catch Exception e
+      {:status 400
+       :headers {"content-type" "application/edn"}
+       :body (pr-str {:error (.getMessage e)})})))
+
 ;; Route definitions
 (def routes
   [["/" {:get root-handler}]
    ["/api"
+    ["/ai-move" {:post ai-move-handler}]
     ["/games"
      ["" {:post create-game-handler}]
      ["/:id" {:get get-game-handler

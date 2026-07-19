@@ -15,9 +15,23 @@
 ;; --------------------------------------------------------------------------
 
 (deftest action-space-is-fixed
-  (is (= 54 actions/num-actions))
+  (is (= 93 actions/num-actions))
   (is (= 23 (count actions/building-order)))
   (is (= (set actions/building-order) (set (keys state/buildings)))))
+
+(deftest mayor-placement-actions
+  (let [g (-> (mk-game) (assoc :colonist-ship 3))
+        g2 (rules/select-role g 1 :mayor)
+        ids (set (actions/legal-action-ids g2))]
+    ;; P1 has colonists in hand and an unmanned indigo plantation:
+    ;; placement is mandatory, so no pass action
+    (is (contains? ids (actions/action-id {:kind :place-plantation :plantation :indigo})))
+    (is (not (contains? ids (actions/action-id {:kind :pass}))))
+    ;; placing keeps the turn with the same player
+    (let [g3 (actions/apply-action g2 (actions/action-id {:kind :place-plantation :plantation :indigo}))]
+      (is (= (:role-execution-current-idx g2) (:role-execution-current-idx g3)))
+      ;; nothing else placeable: now done is the only option
+      (is (= [(actions/action-id {:kind :pass})] (actions/legal-action-ids g3))))))
 
 (deftest legal-actions-at-game-start
   (let [g (mk-game)

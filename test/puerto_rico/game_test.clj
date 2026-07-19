@@ -284,60 +284,137 @@
         ;; 2 + privilege 1 + 3
         (is (= 6 (get-in g3 [:players 0 :victory-points])))))))
 
+(defn full-ships
+  "Ships completely filled with other goods so nothing can be loaded"
+  []
+  [{:capacity 4 :good :indigo :amount 4}
+   {:capacity 5 :good :sugar :amount 5}
+   {:capacity 6 :good :tobacco :amount 6}])
+
+(defn- end-loading
+  "Current player cannot load - passing ends the loading phase (everyone else
+   is skipped) and begins storage"
+  [g]
+  (rules/apply-move g {:type :role-action :role :captain
+                       :player-id (:id (nth (:players g) (:role-execution-current-idx g)))
+                       :args []}))
+
+(defn- storage-move [g args]
+  (rules/apply-move g {:type :role-action :role :captain
+                       :player-id (:id (nth (:players g) (:role-execution-current-idx g)))
+                       :args args}))
+
 (deftest captain-storage
-  (testing "no warehouse: keep exactly one single good"
-    (let [g (-> (captain-game)
+  (testing "no warehouse: the player chooses which single good to keep"
+    (let [g (-> (captain-game :ships (full-ships))
                 (set-player 0 {:goods (goods {:corn 3 :coffee 2})}))
-          g2 (rules/end-role-execution g)]
-      (is (= (goods {:coffee 1}) (get-in g2 [:players 0 :goods])))))
-  (testing "small warehouse: all of ONE kind plus one single good"
-    (let [g (-> (captain-game)
+          g2 (end-loading g)]
+      ;; storage sub-phase reached, P1 must decide
+      (is (:storage-phase g2))
+      (is (= 0 (:role-execution-current-idx g2)))
+      ;; keep a single corn (against value order - it's the player's choice)
+      (let [g3 (storage-move g2 [:store-single :corn])]
+        (is (= (goods {:corn 1}) (get-in g3 [:players 0 :goods])))
+        ;; trivial players auto-resolved, role over
+        (is (not (:storage-phase g3)))
+        (is (= :role-selection (:phase g3))))))
+  (testing "small warehouse: all of ONE chosen kind plus one single good"
+    (let [g (-> (captain-game :ships (full-ships))
                 (set-player 0 {:goods (goods {:corn 3 :coffee 2 :indigo 1})
                                :buildings [{:type :small-warehouse :colonists 1}]}))
-          g2 (rules/end-role-execution g)]
-      ;; keep all 3 corn (most barrels) + 1 coffee (most valuable remainder)
-      (is (= (goods {:corn 3 :coffee 1}) (get-in g2 [:players 0 :goods])))))
-  (testing "large warehouse: all of TWO kinds plus one single good"
-    (let [g (-> (captain-game)
+          g2 (end-loading g)
+          g3 (-> g2
+                 (storage-move [:store-kind :corn])
+                 (storage-move [:store-single :coffee]))]
+      (is (= (goods {:corn 3 :coffee 1}) (get-in g3 [:players 0 :goods])))))
+  (testing "large warehouse: two kinds fully plus a single keeps everything"
+    (let [g (-> (captain-game :ships (full-ships))
                 (set-player 0 {:goods (goods {:corn 3 :coffee 2 :indigo 1})
                                :buildings [{:type :large-warehouse :colonists 1}]}))
-          g2 (rules/end-role-execution g)]
-      (is (= (goods {:corn 3 :coffee 2 :indigo 1}) (get-in g2 [:players 0 :goods])))))
-  (testing "discarded goods return to the supply"
-    (let [g (-> (captain-game)
+          g2 (end-loading g)
+          g3 (-> g2
+                 (storage-move [:store-kind :corn])
+                 (storage-move [:store-kind :coffee])
+                 (storage-move [:store-single :indigo]))]
+      (is (= (goods {:corn 3 :coffee 2 :indigo 1}) (get-in g3 [:players 0 :goods])))))
+  (testing "a single kind with no warehouse auto-resolves to one kept good"
+    (let [g (-> (captain-game :ships (full-ships))
                 (set-player 0 {:goods (goods {:corn 3})}))
           supply-before (get-in g [:goods-supply :corn])
-          g2 (rules/end-role-execution g)]
+          g2 (end-loading g)]
+      ;; no decision needed anywhere: storage resolved automatically
+      (is (= :role-selection (:phase g2)))
+      (is (= (goods {:corn 1}) (get-in g2 [:players 0 :goods])))
       (is (= (+ supply-before 2) (get-in g2 [:goods-supply :corn]))))))
 
 ;; ================================================================================
 ;; Mayor
 ;; ================================================================================
 
+(defn- drive-role
+  "Let the heuristic AI play out the current role execution to completion"
+  [g]
+  (loop [gs g, n 0]
+    (if (or (not= :role-execution (:phase gs)) (> n 100))
+      gs
+      (let [idx (:role-execution-current-idx gs)
+            pid (:id (nth (:players gs) idx))]
+        (recur (rules/apply-move gs (ai/ai-select-move gs pid)) (inc n))))))
+
 (deftest mayor-distribution
   (testing "ship colonists are dealt starting with the mayor, plus supply privilege"
     (let [g (-> (mk-game 3)
-                (assoc :governor-idx 0
-                       :role-selector-idx 2   ;; P3 is the mayor
-                       :colonist-ship 4))
-          g2 (rules/execute-mayor g)
-          totals (mapv state/count-total-colonists (:players g2))]
-      ;; deal order: P3 P1 P2 P3 -> P3 gets 2 (+1 privilege), P1 1, P2 1
-      (is (= [1 1 3] totals))))
-  (testing "ship refill: one per empty building circle, minimum player count"
+                (assoc :governor-idx 0 :colonist-ship 4 :current-player-idx 2))
+          ;; P3 (seat 2) selects mayor: distribution happens immediately
+          g2 (rules/select-role g 3 :mayor)]
+      ;; deal order: P3 P1 P2 P3 -> P3 has 2 + 1 privilege in hand, P1 1, P2 1
+      (is (= 1 (get-in g2 [:players 0 :colonists-in-hand])))
+      (is (= 1 (get-in g2 [:players 1 :colonists-in-hand])))
+      (is (= 3 (get-in g2 [:players 2 :colonists-in-hand])))
+      (is (zero? (:colonist-ship g2)))
+      ;; the mayor places first
+      (is (= 2 (:role-execution-current-idx g2)))))
+  (testing "placement is one colonist at a time; done only when nothing is placeable"
+    (let [g (-> (mk-game 3) (assoc :colonist-ship 3))
+          g2 (rules/select-role g 1 :mayor)   ;; P1: 1 dealt + 1 privilege = 2 in hand
+          place {:type :role-action :role :mayor :player-id 1
+                 :args [:place-colonist :plantation :indigo]}
+          done {:type :role-action :role :mayor :player-id 1 :args []}
+          ;; done is refused while the player can still place
+          g-refused (rules/apply-move g2 done)
+          g3 (rules/apply-move g2 place)]
+      (is (= 2 (get-in g2 [:players 0 :colonists-in-hand])))
+      (is (identical? g2 g-refused))
+      (is (= 1 (get-in g3 [:players 0 :colonists-in-hand])))
+      (is (= 1 (:colonists (first (get-in g3 [:players 0 :plantations])))))
+      ;; the island is now fully manned: done moves leftovers to San Juan
+      (let [g4 (rules/apply-move g3 done)]
+        (is (= 1 (get-in g4 [:players 0 :san-juan-colonists])))
+        (is (= 1 (:role-execution-current-idx g4))))))
+  (testing "placement can rearrange: the board is swept into hand at turn start"
+    (let [g (-> (mk-game 3)
+                (set-player 0 {:plantations [{:type :corn :colonists 1}
+                                             {:type :indigo :colonists 0}]})
+                (assoc :colonist-ship 0 :colonist-supply 0))
+          g2 (rules/select-role g 1 :mayor)]
+      ;; the corn colonist was swept into hand for re-placement
+      (is (= 1 (get-in g2 [:players 0 :colonists-in-hand])))
+      (is (zero? (:colonists (first (get-in g2 [:players 0 :plantations])))))))
+  (testing "ship refill at phase end: empty building circles, minimum player count"
     (let [g (-> (mk-game 3)
                 (set-player 0 {:buildings [{:type :large-indigo-maker :colonists 0}
                                            {:type :coffee-maker :colonists 0}]})
-                (assoc :role-selector-idx 0 :colonist-ship 0))
-          g2 (rules/execute-mayor g)]
-      ;; the privilege colonist is auto-placed on the indigo plantation (chain
-      ;; scoring), so all 5 building circles (3 + 2) stay empty; refill =
-      ;; max(5, 3) = 5
-      (is (= 5 (:colonist-ship g2)))))
+                (assoc :colonist-ship 0))
+          g2 (drive-role (rules/select-role g 1 :mayor))
+          empty-circles (reduce + (for [p (:players g2), b (:buildings p)]
+                                    (- (get-in state/buildings [(:type b) :worker] 1)
+                                       (:colonists b))))]
+      (is (not= :role-execution (:phase g2)))
+      (is (= (max 3 empty-circles) (:colonist-ship g2)))))
   (testing "a refill shortfall triggers the game-end condition"
     (let [g (-> (mk-game 3)
-                (assoc :role-selector-idx 0 :colonist-ship 0 :colonist-supply 2))
-          g2 (rules/execute-mayor g)]
+                (assoc :colonist-ship 0 :colonist-supply 0))
+          g2 (drive-role (rules/select-role g 1 :mayor))]
       (is (:colonist-ship-shortfall g2))
       (is (state/check-victory-conditions g2)))))
 

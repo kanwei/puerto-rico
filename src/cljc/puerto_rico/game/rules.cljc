@@ -143,135 +143,123 @@
   "Get number of empty spaces on a tile"
   (- (get-tile-capacity tile) (:colonists tile 0)))
 
-(defn smart-place-colonists [player]
-  "Intelligently place colonists to maximize production and efficiency"
-  (let [colonists-to-place (+ (:colonists-in-hand player) (:san-juan-colonists player))
+;; --------------------------------------------------------------------------
+;; Mayor phase
+;;
+;; Distribution (privilege colonist + dealing the ship) is automatic - the
+;; rules leave no choice. PLACEMENT is a real decision: each player, mayor
+;; first then clockwise, has their board swept into their hand and places
+;; colonists one at a time. The rulebook allows full rearrangement, which the
+;; sweep makes expressible one placement at a time. A player may only stop
+;; placing when their hand is empty or no empty circle remains (leftovers go
+;; to the windrose / San Juan).
+;; --------------------------------------------------------------------------
 
-        ;; Get all plantation and building info with spaces
-        plantations (map-indexed
-                     (fn [idx p] {:idx idx :type :plantation :tile p
-                                  :good-type (:type p) :empty (get-empty-spaces p)})
-                     (:plantations player))
-        buildings (map-indexed
-                   (fn [idx b] {:idx idx :type :building :tile b
-                                :good-type (get-in state/buildings [(:type b) :good])
-                                :empty (get-empty-spaces b)})
-                   (:buildings player))
+(defn sweep-colonists-to-hand
+  "Move all of a player's colonists (board + San Juan + hand) into their hand
+   for re-placement during their mayor turn"
+  [game-state player-idx]
+  (update-in game-state [:players player-idx]
+             (fn [player]
+               (let [total (+ (reduce + (map :colonists (:plantations player)))
+                              (reduce + (map :colonists (:buildings player)))
+                              (:san-juan-colonists player)
+                              (:colonists-in-hand player))]
+                 (-> player
+                     (update :plantations (fn [ps] (mapv #(assoc % :colonists 0) ps)))
+                     (update :buildings (fn [bs] (mapv #(assoc % :colonists 0) bs)))
+                     (assoc :san-juan-colonists 0)
+                     (assoc :colonists-in-hand total))))))
 
-        ;; Find production chains (plantation + building for same good)
-        production-chains (for [p plantations
-                                b buildings
-                                :when (and (:good-type p) (:good-type b)
-                                           (= (:good-type p) (:good-type b))
-                                           (> (:empty p) 0) (> (:empty b) 0))]
-                            {:plantation p :building b :good (:good-type p)})
+(defn placement-destinations
+  "Destination types where the player can place a colonist from hand:
+   {:plantations #{types with an unmanned tile} :buildings #{types with an open circle}}"
+  [player]
+  {:plantations (set (map :type (filter #(zero? (:colonists %)) (:plantations player))))
+   :buildings (set (map :type (filter #(pos? (get-empty-spaces %)) (:buildings player))))})
 
-;; Priority scoring function
-        score-placement (fn [item]
-                          (cond
-                            ;; Highest priority: Complete production chains
-                            (some (fn [chain] (or (= item (:plantation chain))
-                                                  (= item (:building chain))))
-                                  production-chains) 100
-                            ;; Very high priority: Utility buildings (warehouses, hacienda, etc)
-                            (and (= (:type item) :building)
-                                 (contains? #{:small-warehouse :large-warehouse :hacienda
-                                              :construction-hut :hospice :small-market :large-market
-                                              :office :factory :university :harbor :wharf}
-                                            (get-in item [:tile :type]))) 90
-                            ;; High priority: Quarries (building discounts)  
-                            (and (= (:type item) :plantation)
-                                 (= (:good-type item) :quarry)) 80
-                            ;; Medium priority: Production buildings without matching plantations
-                            (and (= (:type item) :building) (:good-type item)) 50
-                            ;; Lower priority: Plantations without matching buildings
-                            (and (= (:type item) :plantation) (:good-type item)) 30
-                            ;; Lowest: Large buildings (usually only 1 worker slot)
-                            (and (= (:type item) :building)
-                                 (contains? #{:guild-hall :residence :customs-house :city-hall :fortress}
-                                            (get-in item [:tile :type]))) 10
-                            ;; Default
-                            :else 20))
+(defn can-place-colonist? [player]
+  (and (pos? (:colonists-in-hand player))
+       (let [{:keys [plantations buildings]} (placement-destinations player)]
+         (or (seq plantations) (seq buildings)))))
 
-        ;; Get all placeable items and sort by strategic value
-        all-items (concat plantations buildings)
-        items-with-spaces (filter #(> (:empty %) 0) all-items)
-        sorted-items (sort-by score-placement > items-with-spaces)
+(defn mayor-turn-done?
+  "A player may only end their placement turn when their hand is empty or
+   there is nowhere left to place (all empty circles must be filled)"
+  [player]
+  (not (can-place-colonist? player)))
 
-        ;; Place colonists strategically
-        [updated-player remaining-colonists]
-        (reduce (fn [[player remaining] item]
-                  (if (<= remaining 0)
-                    [player remaining]
-                    (let [spaces-to-fill (min remaining (:empty item))
-                          tile-path (if (= (:type item) :plantation)
-                                      [:plantations (:idx item)]
-                                      [:buildings (:idx item)])]
-                      [(update-in player (conj tile-path :colonists) + spaces-to-fill)
-                       (- remaining spaces-to-fill)])))
-                [player colonists-to-place]
-                sorted-items)]
-
-    (-> updated-player
-        (assoc :colonists-in-hand 0)
-        (assoc :san-juan-colonists remaining-colonists))))
-
-(defn execute-mayor [game-state]
-  "Execute the mayor role - distribute colonists according to Puerto Rico rules"
-  (let [role-selector-idx (:role-selector-idx game-state)
+(defn begin-mayor-phase
+  "Runs when the mayor placard is selected: privilege colonist from the supply,
+   deal the ship one at a time clockwise from the mayor, then sweep the first
+   player's board for re-placement."
+  [game-state]
+  (let [selector-idx (:role-selector-idx game-state)
         num-players (count (:players game-state))
-
-        ;; Step 1: Role selector gets privilege (1 colonist from supply, not ship)
-        game-after-privilege (if (and role-selector-idx (> (:colonist-supply game-state) 0))
+        ;; privilege: 1 colonist from the supply (not the ship)
+        game-after-privilege (if (and selector-idx (pos? (:colonist-supply game-state)))
                                (-> game-state
-                                   (update-in [:players role-selector-idx :colonists-in-hand] inc)
+                                   (update-in [:players selector-idx :colonists-in-hand] inc)
                                    (update :colonist-supply dec))
                                game-state)
-
-        ;; Step 2: Distribute ALL colonists from ship, one at a time,
-        ;; starting with the mayor (role selector) and going clockwise
+        ;; deal the ship starting with the mayor, clockwise
         colonists-on-ship (:colonist-ship game-after-privilege)
-        distribution-start (or role-selector-idx (:governor-idx game-after-privilege) 0)
-        game-after-ship (if (> colonists-on-ship 0)
-                          (loop [game game-after-privilege
-                                 remaining-colonists colonists-on-ship
-                                 current-player-idx distribution-start]
-                            (if (<= remaining-colonists 0)
-                              (assoc game :colonist-ship 0)
-                              (let [next-player-idx (mod (inc current-player-idx) num-players)]
-                                (recur
-                                 (update-in game [:players current-player-idx :colonists-in-hand] inc)
-                                 (dec remaining-colonists)
-                                 next-player-idx))))
-                          game-after-privilege)
+        game-after-ship (loop [game game-after-privilege
+                               remaining colonists-on-ship
+                               idx (or selector-idx 0)]
+                          (if (<= remaining 0)
+                            (assoc game :colonist-ship 0)
+                            (recur (update-in game [:players idx :colonists-in-hand] inc)
+                                   (dec remaining)
+                                   (mod (inc idx) num-players))))]
+    (sweep-colonists-to-hand game-after-ship selector-idx)))
 
-        ;; Step 3: Smart-place colonists for ALL players
-        game-after-placement (update game-after-ship :players
-                                     (fn [players]
-                                       (mapv smart-place-colonists players)))
+(defn execute-mayor-placement
+  "Place one colonist from the player's hand on a tile of the given type.
+   dest-kind is :plantation or :building."
+  [game-state player-id dest-kind dest-key]
+  (let [player-idx (state/player-index game-state player-id)
+        player (when player-idx (get-in game-state [:players player-idx]))]
+    (if (and player (pos? (:colonists-in-hand player)))
+      (let [tiles-key (if (= dest-kind :plantation) :plantations :buildings)
+            tile-idx (first (keep-indexed
+                             (fn [i tile]
+                               (when (and (= (:type tile) dest-key)
+                                          (pos? (get-empty-spaces tile)))
+                                 i))
+                             (get player tiles-key)))]
+        (if tile-idx
+          (-> game-state
+              (update-in [:players player-idx tiles-key tile-idx :colonists] inc)
+              (update-in [:players player-idx :colonists-in-hand] dec))
+          game-state))
+      game-state)))
 
-        ;; Step 4: Refill colonist ship based on empty building circles across ALL players
-        total-empty-building-circles (reduce +
-                                             (map (fn [player]
-                                                    (reduce +
-                                                            (map (fn [building]
-                                                                   (max 0 (- (get-tile-capacity building)
-                                                                             (:colonists building))))
-                                                                 (:buildings player))))
-                                                  (:players game-after-placement)))
+(defn- refill-colonist-ship
+  "Mayor's last duty: 1 colonist per empty building circle across all players,
+   minimum the player count. A shortfall triggers the game-end condition."
+  [game-state]
+  (let [num-players (count (:players game-state))
+        empty-circles (reduce + (for [player (:players game-state)
+                                      building (:buildings player)]
+                                  (max 0 (- (get-tile-capacity building)
+                                            (:colonists building)))))
+        to-add (max num-players empty-circles)
+        available (min to-add (:colonist-supply game-state))]
+    (-> game-state
+        (update :colonist-ship + available)
+        (update :colonist-supply - available)
+        (cond-> (< available to-add) (assoc :colonist-ship-shortfall true)))))
 
-        ;; Refill with one colonist per empty building circle, minimum = player count
-        colonists-to-add (max num-players total-empty-building-circles)
-        colonists-available (min colonists-to-add (:colonist-supply game-after-placement))
-
-        final-game (-> game-after-placement
-                       (update :colonist-ship + colonists-available)
-                       (update :colonist-supply - colonists-available))]
-
-    ;; Rulebook game-end trigger: the ship could not be fully refilled
-    (if (< colonists-available colonists-to-add)
-      (assoc final-game :colonist-ship-shortfall true)
-      final-game)))
+(defn- finish-mayor-turn
+  "Any colonists left in hand (only possible when no circles remain) go to the
+   windrose / San Juan"
+  [game-state player-idx]
+  (update-in game-state [:players player-idx]
+             (fn [player]
+               (-> player
+                   (update :san-juan-colonists + (:colonists-in-hand player))
+                   (assoc :colonists-in-hand 0)))))
 
 (defn building-cost
   "Actual cost of a building for a player: base cost minus quarry discount
@@ -666,7 +654,9 @@
           (assoc :role-execution-current-idx (first execution-order))
           (assoc :phase :role-execution)
           (update :available-roles disj role)
-          (update :used-roles conj role)))
+          (update :used-roles conj role)
+          ;; Mayor: colonist distribution is automatic; placement turns follow
+          (cond-> (= role :mayor) begin-mayor-phase)))
     game-state))
 
 (defn warehouse-kinds-storable
@@ -677,34 +667,117 @@
   (+ (if (has-occupied-building? player :small-warehouse) 1 0)
      (if (has-occupied-building? player :large-warehouse) 2 0)))
 
-(defn- store-player-goods
-  "Returns [player-with-kept-goods discarded-goods-map]"
-  [player]
-  (let [current-goods (:goods player)
-        goods-with-amounts (filter #(pos? (second %)) current-goods)
-        kinds-storable (warehouse-kinds-storable player)
-        ;; Auto-choice: keep the kinds with the most goods (ties: most valuable)
-        sorted-kinds (sort-by (fn [[good amount]] [amount (get good-values good 0)])
-                              #(compare %2 %1)
-                              goods-with-amounts)
-        kept-kinds (map first (take kinds-storable sorted-kinds))
-        remaining (drop kinds-storable sorted-kinds)
-        ;; Windrose: one single good of the most valuable remaining kind
-        windrose-kind (->> remaining (map first) (sort-by good-values >) first)
-        new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
-                         (select-keys current-goods kept-kinds)
-                         (when windrose-kind {windrose-kind 1}))
-        discarded (merge-with - current-goods new-goods)]
-    [(assoc player :goods new-goods) discarded]))
+;; --------------------------------------------------------------------------
+;; Storage sub-phase (end of the captain phase)
+;;
+;; Each player may keep: all goods of one kind per warehouse "slot" (small
+;; warehouse 1, large 2, both 3) plus exactly one single good on the windrose.
+;; Everything else returns to the supply. When a player has real options
+;; (more kinds than slots), that's a decision; trivial cases auto-resolve.
+;; During the sub-phase :storage-phase is true and :storage-picks tracks the
+;; current player's selections {:kinds #{goods} :single good-or-nil}.
+;; --------------------------------------------------------------------------
 
-(defn apply-storage-rules [game-state]
-  "Apply storage rules at end of captain phase - players must discard excess goods"
-  (let [results (map store-player-goods (:players game-state))
-        updated-players (mapv first results)
-        total-discarded (reduce #(merge-with + %1 %2) {} (map second results))]
+(defn- goods-kinds [player]
+  (set (keep (fn [[g amount]] (when (pos? amount) g)) (:goods player))))
+
+(defn needs-storage-decision?
+  "A choice exists when the player holds more kinds than fit their warehouses
+   and at least two kinds (with one kind the forced single is unambiguous)"
+  [player]
+  (let [kinds (count (goods-kinds player))]
+    (and (>= kinds 2) (> kinds (warehouse-kinds-storable player)))))
+
+(defn legal-storage-picks
+  "Remaining storage choices for the player at player-idx:
+   {:kinds #{goods eligible for a warehouse slot} :singles #{goods eligible for the windrose}}"
+  [game-state player-idx]
+  (let [player (get-in game-state [:players player-idx])
+        picks (get-in game-state [:storage-picks player-idx])
+        kinds-left (- (warehouse-kinds-storable player) (count (:kinds picks)))
+        unkept (remove (:kinds picks #{}) (goods-kinds player))]
+    {:kinds (if (pos? kinds-left) (set unkept) #{})
+     :singles (if (:single picks) #{} (set unkept))}))
+
+(defn execute-storage-pick
+  "op is :store-kind (keep all goods of a kind - uses a warehouse slot) or
+   :store-single (keep one good on the windrose)"
+  [game-state player-id op good]
+  (let [player-idx (state/player-index game-state player-id)
+        {:keys [kinds singles]} (legal-storage-picks game-state player-idx)]
+    (case op
+      :store-kind (if (contains? kinds good)
+                    (update-in game-state [:storage-picks player-idx :kinds]
+                               (fnil conj #{}) good)
+                    game-state)
+      :store-single (if (contains? singles good)
+                      (assoc-in game-state [:storage-picks player-idx :single] good)
+                      game-state)
+      game-state)))
+
+(defn- finalize-player-storage
+  "Apply the player's picks: keep chosen kinds in full plus the single;
+   everything else goes back to the supply"
+  [game-state player-idx]
+  (let [player (get-in game-state [:players player-idx])
+        {:keys [kinds single]} (get-in game-state [:storage-picks player-idx])
+        current-goods (:goods player)
+        new-goods (merge {:corn 0 :indigo 0 :sugar 0 :tobacco 0 :coffee 0}
+                         (select-keys current-goods (vec (or kinds #{})))
+                         (when (and single (not (contains? kinds single)))
+                           {single 1}))
+        discarded (merge-with - current-goods new-goods)]
     (-> game-state
-        (assoc :players updated-players)
-        (update :goods-supply #(merge-with + % total-discarded)))))
+        (assoc-in [:players player-idx :goods] new-goods)
+        (update :goods-supply #(merge-with + % discarded)))))
+
+(defn- auto-store
+  "Resolve storage for a player with no real choice: keep everything when the
+   kinds fit the warehouses; with one kind and no warehouse keep one single."
+  [game-state player-idx]
+  (let [player (get-in game-state [:players player-idx])
+        kinds (goods-kinds player)
+        slots (warehouse-kinds-storable player)]
+    (cond
+      (empty? kinds) game-state
+      (<= (count kinds) slots) game-state          ;; everything fits, keep all
+      :else ;; single kind, no warehouse: keep 1 of it
+      (-> game-state
+          (assoc-in [:storage-picks player-idx] {:kinds #{} :single (first kinds)})
+          (finalize-player-storage player-idx)))))
+
+(declare finish-role-execution)
+
+(defn- begin-storage-phase
+  "Runs when captain loading ends: resolve trivial storage automatically and
+   stop at the first player with a real decision, or finish the role."
+  [game-state]
+  (let [order (:role-execution-order game-state)]
+    (loop [gs (assoc game-state :storage-phase true :storage-picks {})
+           [idx & more] order]
+      (cond
+        (nil? idx) (finish-role-execution (dissoc gs :storage-phase :storage-picks))
+        (needs-storage-decision? (get-in gs [:players idx]))
+        (-> gs
+            (assoc :role-execution-current-idx idx)
+            (assoc :storage-order (vec more)))
+        :else (recur (auto-store gs idx) more)))))
+
+(defn- advance-storage
+  "Finalize the current player's storage and move to the next player who has a
+   decision, auto-resolving the rest"
+  [game-state]
+  (let [current (:role-execution-current-idx game-state)]
+    (loop [gs (finalize-player-storage game-state current)
+           [idx & more] (:storage-order game-state)]
+      (cond
+        (nil? idx) (finish-role-execution
+                    (dissoc gs :storage-phase :storage-picks :storage-order))
+        (needs-storage-decision? (get-in gs [:players idx]))
+        (-> gs
+            (assoc :role-execution-current-idx idx)
+            (assoc :storage-order (vec more)))
+        :else (recur (auto-store gs idx) more)))))
 
 (defn- start-new-round [game-state]
   (let [num-players (count (:players game-state))
@@ -758,9 +831,9 @@
                                        (dissoc :hacienda-used))
                           ;; Trader: empty the trading house only if it is full
                           :trader (clear-full-trading-house base-game)
-                          ;; Captain: storage rules, then unload full ships
+                          ;; Captain: unload full ships (storage already resolved
+                          ;; in the storage sub-phase)
                           :captain (-> base-game
-                                       (apply-storage-rules)
                                        (return-full-ships-to-supply)
                                        (dissoc :captain-bonus-awarded :captain-passes :wharf-used))
                           base-game)
@@ -775,9 +848,9 @@
       game-after-role)))
 
 (defn- advance-captain
-  "The captain phase loops clockwise as long as at least one player can load.
-   Skips players who cannot act; ends the phase after a full lap of consecutive
-   non-loading turns."
+  "The captain loading phase loops clockwise as long as at least one player can
+   load. Skips players who cannot act; when a full lap passes with no loading,
+   the loading ends and the storage sub-phase begins."
   [game-state]
   (let [num-players (count (:players game-state))
         current-idx (:role-execution-current-idx game-state)]
@@ -786,7 +859,7 @@
            steps 0]
       (cond
         (or (>= passes num-players) (> steps num-players))
-        (finish-role-execution game-state)
+        (begin-storage-phase game-state)
 
         (captain-can-act? game-state idx)
         (-> game-state
@@ -796,11 +869,33 @@
         :else
         (recur (mod (inc idx) num-players) (inc passes) (inc steps))))))
 
+(defn- advance-mayor
+  "Finish the current player's placement turn (leftovers to San Juan), then
+   sweep the next player's board - or refill the colonist ship and end the role"
+  [game-state]
+  (let [execution-order (:role-execution-order game-state)
+        current-idx (:role-execution-current-idx game-state)]
+    ;; All empty circles must be filled: refuse to end the turn while the
+    ;; player can still place
+    (if (can-place-colonist? (get-in game-state [:players current-idx]))
+      game-state
+      (let [gs (finish-mayor-turn game-state current-idx)
+            next-position (inc (.indexOf execution-order current-idx))]
+        (if (>= next-position (count execution-order))
+          (-> gs refill-colonist-ship finish-role-execution)
+          (let [next-idx (nth execution-order next-position)]
+            (-> gs
+                (assoc :role-execution-current-idx next-idx)
+                (sweep-colonists-to-hand next-idx))))))))
+
 (defn advance-role-execution [game-state]
   "Move to the next player in role execution order, or end the role when all
-   players have acted. The captain phase instead loops until nobody can load."
-  (if (= (:selected-role game-state) :captain)
-    (advance-captain game-state)
+   players have acted. The captain and mayor phases have their own flows."
+  (case (:selected-role game-state)
+    :captain (if (:storage-phase game-state)
+               (advance-storage game-state)
+               (advance-captain game-state))
+    :mayor (advance-mayor game-state)
     (let [execution-order (:role-execution-order game-state)
           current-idx (:role-execution-current-idx game-state)
           current-position (.indexOf execution-order current-idx)
@@ -813,11 +908,20 @@
   "Execute the selected role with given arguments"
   (case role
     :settler (execute-settler game-state player-id (first args))
-    :mayor (execute-mayor game-state)
+    ;; Mayor: [:place-colonist :plantation :corn] places one colonist;
+    ;; empty args = done placing (handled by apply-move / the advance flow)
+    :mayor (if (= (first args) :place-colonist)
+             (execute-mayor-placement game-state player-id (second args) (nth args 2))
+             game-state)
     :builder (execute-builder game-state player-id (first args))
     :craftsman (execute-craftsman game-state)
     :trader (execute-trader game-state player-id (first args))
-    :captain (execute-captain game-state player-id (first args) (second args))
+    ;; Captain: loading turns, or storage picks during the storage sub-phase
+    :captain (if (:storage-phase game-state)
+               (if (seq args)
+                 (execute-storage-pick game-state player-id (first args) (second args))
+                 game-state)
+               (execute-captain game-state player-id (first args) (second args)))
     (:prospector :prospector-2)
     (let [executor-idx (:role-execution-current-idx game-state)
           selector-idx (:role-selector-idx game-state)]
@@ -850,24 +954,41 @@
     :select-role (select-role game-state (:player-id move) (:role move))
     :role-action
     (let [role (:role move)
-          game-after (apply execute-role game-state role (:player-id move) (:args move))]
-      (if (and (= role :settler)
-               (= (first (:args move)) :random-from-deck))
+          args (:args move)
+          game-after (apply execute-role game-state role (:player-id move) args)]
+      (cond
         ;; Hacienda bonus draw happens BEFORE the regular settler take:
         ;; it does not consume the player's turn
+        (and (= role :settler) (= (first args) :random-from-deck))
         game-after
-        (case role
-          ;; Mayor and craftsman execute once for the whole table; prospector
-          ;; only affects the selector - end the role immediately
-          (:mayor :craftsman :prospector :prospector-2)
-          (end-role-execution game-after)
 
-          ;; Captain: a turn that loaded nothing counts as a pass so the
-          ;; looping phase always terminates
-          :captain
-          (advance-role-execution (if (identical? game-after game-state)
-                                    (pass-captain-turn game-after)
-                                    game-after))
+        ;; Mayor placement: the player keeps placing until done (empty args)
+        (= role :mayor)
+        (if (seq args)
+          game-after
+          (advance-role-execution game-after))
 
-          (advance-role-execution game-after))))
+        ;; Craftsman executes once for the whole table; prospector only
+        ;; affects the selector - end the role immediately
+        (contains? #{:craftsman :prospector :prospector-2} role)
+        (end-role-execution game-after)
+
+        ;; Captain storage: picks continue the turn; auto-finalize once
+        ;; nothing pickable remains; empty args = done
+        (and (= role :captain) (:storage-phase game-state))
+        (let [player-idx (:role-execution-current-idx game-after)
+              {:keys [kinds singles]} (legal-storage-picks game-after player-idx)]
+          (if (and (seq args) (or (seq kinds) (seq singles)))
+            game-after
+            (advance-role-execution game-after)))
+
+        ;; Captain loading: a turn that loaded nothing counts as a pass so
+        ;; the looping phase always terminates
+        (= role :captain)
+        (advance-role-execution (if (identical? game-after game-state)
+                                  (pass-captain-turn game-after)
+                                  game-after))
+
+        :else
+        (advance-role-execution game-after)))
     game-state))
