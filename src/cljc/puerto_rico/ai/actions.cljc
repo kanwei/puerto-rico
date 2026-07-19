@@ -74,6 +74,23 @@
 
 (def ^:private pass-id (action-id {:kind :pass}))
 
+;; Precomputed key -> action-id lookups so the hot path (legal-action-ids,
+;; called on every MCTS node and every random-playout step) does a cheap
+;; keyword lookup instead of constructing a descriptor map and hashing it.
+(defn- id-map [f keys] (into {} (map (fn [k] [k (action-id (f k))]) keys)))
+(def ^:private select-role->id (id-map (fn [r] {:kind :select-role :role r}) role-order))
+(def ^:private settler-take->id (id-map (fn [p] {:kind :settler-take :plantation p}) plantation-order))
+(def ^:private hacienda-id (action-id {:kind :settler-hacienda}))
+(def ^:private build->id (id-map (fn [b] {:kind :build :building b}) building-order))
+(def ^:private trade->id (id-map (fn [g] {:kind :trade :good g}) good-order))
+(def ^:private ship->id (id-map (fn [g] {:kind :ship :good g}) good-order))
+(def ^:private wharf->id (id-map (fn [g] {:kind :wharf :good g}) good-order))
+(def ^:private place-plantation->id (id-map (fn [p] {:kind :place-plantation :plantation p}) plantation-order))
+(def ^:private place-building->id (id-map (fn [b] {:kind :place-building :building b}) building-order))
+(def ^:private store-kind->id (id-map (fn [g] {:kind :store-kind :good g}) good-order))
+(def ^:private store-single->id (id-map (fn [g] {:kind :store-single :good g}) good-order))
+(def ^:private privilege->id (id-map (fn [g] {:kind :privilege-good :good g}) good-order))
+
 (defn legal-action-ids
   "Vector of legal action ids for the player who must act now.
    Empty when the game is over."
@@ -82,8 +99,8 @@
     (:game-over game-state) []
 
     (= (:phase game-state) :role-selection)
-    (mapv #(action-id {:kind :select-role :role %})
-          (filter (:available-roles game-state) role-order))
+    (let [avail (:available-roles game-state)]
+      (into [] (comp (filter avail) (map select-role->id)) role-order))
 
     (= (:phase game-state) :role-execution)
     (let [player-idx (actor-index game-state)
@@ -92,71 +109,66 @@
         :settler
         (if (rules/island-full? player)
           [pass-id]
-          (let [takes (map #(action-id {:kind :settler-take :plantation %})
-                           (distinct (:face-up-plantations game-state)))
+          (let [takes (map settler-take->id (distinct (:face-up-plantations game-state)))
                 quarry (when (and (pos? (:quarry-supply game-state))
                                   (rules/may-take-quarry? game-state player-idx))
-                         [(action-id {:kind :settler-take :plantation :quarry})])
+                         [(settler-take->id :quarry)])
                 hacienda (when (and (rules/has-occupied-building? player :hacienda)
                                     (not (get-in game-state [:hacienda-used player-idx]))
                                     (seq (:plantation-supply game-state)))
-                           [(action-id {:kind :settler-hacienda})])]
-            (vec (concat takes quarry hacienda [pass-id]))))
+                           [hacienda-id])]
+            (into [] cat [takes quarry hacienda [pass-id]])))
 
         :builder
-        (let [builds (map #(action-id {:kind :build :building %})
-                          (filter #(rules/can-build-building? game-state player %)
-                                  building-order))]
-          (vec (concat builds [pass-id])))
+        (conj (into [] (comp (filter #(rules/can-build-building? game-state player %))
+                             (map build->id))
+                    building-order)
+              pass-id)
 
         :trader
-        (let [trades (map #(action-id {:kind :trade :good %})
-                          (filter #(rules/can-trade-good? game-state player %)
-                                  good-order))]
-          (vec (concat trades [pass-id])))
+        (conj (into [] (comp (filter #(rules/can-trade-good? game-state player %))
+                             (map trade->id))
+                    good-order)
+              pass-id)
 
         :captain
         (if (:storage-phase game-state)
           ;; Storage sub-phase: keep kinds / a single, or done (always legal)
           (let [{:keys [kinds singles]} (rules/legal-storage-picks game-state player-idx)]
-            (vec (concat (map #(action-id {:kind :store-kind :good %}) (sort-by good-order-index kinds))
-                         (map #(action-id {:kind :store-single :good %}) (sort-by good-order-index singles))
-                         [pass-id])))
+            (into [] cat [(map store-kind->id (sort-by good-order-index kinds))
+                          (map store-single->id (sort-by good-order-index singles))
+                          [pass-id]]))
           ;; Loading turns
-          (let [ships (map #(action-id {:kind :ship :good %})
-                           (filter #(and (pos? (get-in player [:goods %] 0))
-                                         (rules/find-ship-for-good (:ships game-state) %
-                                                                   (get-in player [:goods %] 0)))
-                                   good-order))
+          (let [ships (into [] (comp (filter #(and (pos? (get-in player [:goods %] 0))
+                                                   (rules/find-ship-for-good (:ships game-state) %
+                                                                             (get-in player [:goods %] 0))))
+                                     (map ship->id))
+                            good-order)
                 wharfs (when (rules/can-use-wharf? game-state player-idx)
-                         (map #(action-id {:kind :wharf :good %})
-                              (filter #(pos? (get-in player [:goods %] 0)) good-order)))]
+                         (into [] (comp (filter #(pos? (get-in player [:goods %] 0)))
+                                        (map wharf->id))
+                               good-order))]
             ;; Loading on a cargo ship is mandatory when possible; the wharf may
             ;; substitute. Passing is only legal when no cargo-ship load exists.
             (if (seq ships)
-              (vec (concat ships wharfs))
-              (vec (concat wharfs [pass-id])))))
+              (into ships wharfs)
+              (conj (vec wharfs) pass-id))))
 
         :mayor
         ;; Placement turns: place from hand until it's empty or nothing is
         ;; placeable; only then is "done" legal
         (let [{:keys [plantations buildings]} (rules/placement-destinations player)
-              hand (:colonists-in-hand player)
-              places (when (pos? hand)
-                       (concat
-                        (map #(action-id {:kind :place-plantation :plantation %})
-                             (filter plantations plantation-order))
-                        (map #(action-id {:kind :place-building :building %})
-                             (filter buildings building-order))))]
-          (if (seq places)
-            (vec places)
-            [pass-id]))
+              places (when (pos? (:colonists-in-hand player))
+                       (into (into [] (comp (filter plantations) (map place-plantation->id))
+                                   plantation-order)
+                             (comp (filter buildings) (map place-building->id))
+                             building-order))]
+          (if (seq places) places [pass-id]))
 
         :craftsman
         ;; After production the selector may face a privilege choice
         (if-let [candidates (seq (:craftsman-privilege-pending game-state))]
-          (mapv #(action-id {:kind :privilege-good :good %})
-                (sort-by good-order-index candidates))
+          (mapv privilege->id (sort-by good-order-index candidates))
           [pass-id])
 
         ;; Prospector has no choices

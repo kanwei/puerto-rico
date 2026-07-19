@@ -11,7 +11,17 @@ Clojure handles self-play and evaluation (it can call the ONNX models directly);
 Python handles training. State passes through files in data/ and models/.
 
 Run from the repo root:
-    python train/loop.py --generations 5 --games 40 --sims 120 --epochs 8
+    python train/loop.py --generations 8 --games 100 --sims 200 --epochs 3
+
+Speed notes (measured on this repo):
+  - Gen 0 uses random rollouts (~240 ms/decision at 200 sims) - the slow gen.
+    Keep --sims modest here; parallel self-play spreads it across all cores.
+  - Gen 1+ use the network, which is ~7x faster per simulation (36 ms/decision
+    at 200 sims, 137 ms at 800). So once a net exists you can afford the
+    400-800 sims that make good policy targets for LESS wall-clock than gen 0.
+  - Keep epochs LOW (2-5): tiny datasets + many epochs = memorization, not
+    strategy. The fix is more GAMES per gen, not more epochs. Training uses a
+    sliding window of the last 5 generations (the replay buffer).
 
 Resume an interrupted run with --start-gen N (champion inferred from models/).
 """
@@ -96,13 +106,14 @@ def evaluate(challenger, champion, games, sims, players):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--generations", type=int, default=5)
-    ap.add_argument("--games", type=int, default=40, help="self-play games per gen")
+    ap.add_argument("--generations", type=int, default=8)
+    ap.add_argument("--games", type=int, default=100, help="self-play games per gen")
     ap.add_argument("--eval-games", type=int, default=30, help="head-to-head games")
-    ap.add_argument("--sims", type=int, default=120)
+    ap.add_argument("--sims", type=int, default=200)
     ap.add_argument("--eval-sims", type=int, default=100)
     ap.add_argument("--players", type=int, default=3)
-    ap.add_argument("--epochs", type=int, default=8)
+    ap.add_argument("--epochs", type=int, default=3,
+                    help="keep low (2-5); more games beats more epochs")
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--width", type=int, default=384)
     ap.add_argument("--blocks", type=int, default=5)

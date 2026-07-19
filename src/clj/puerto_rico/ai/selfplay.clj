@@ -20,6 +20,7 @@
    signal than win/loss alone. It also drives the MCTS utility blend so the AI
    keeps maximizing its point lead even when the win is already decided."
   (:require [cheshire.core :as json]
+            [clj-async-profiler.core :as prof]
             [clojure.java.io :as io]
             [clojure.set :as set]
             [puerto-rico.game.state :as state]

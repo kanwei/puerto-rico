@@ -361,10 +361,13 @@
                                                (pos? (:colonists %)))
                                          (:plantations player)))
         quarry-discount (min occupied-quarries (:column building-info))
-        player-idx (state/player-index game-state (:id player))
+        ;; builder privilege: the role selector pays 1 less. Compare ids
+        ;; (O(1)) instead of scanning players for an index.
+        selector-idx (:role-selector-idx game-state)
         privilege-discount (if (and (= (:selected-role game-state) :builder)
-                                    (some? (:role-selector-idx game-state))
-                                    (= player-idx (:role-selector-idx game-state)))
+                                    selector-idx
+                                    (= (:id player)
+                                       (:id (nth (:players game-state) selector-idx))))
                              1
                              0)]
     (max 0 (- (:cost building-info) quarry-discount privilege-discount))))
