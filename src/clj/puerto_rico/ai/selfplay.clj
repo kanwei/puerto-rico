@@ -85,7 +85,9 @@
       (:game-over gs)
       (let [outcome (mcts/outcome-vector gs)
             margins (score-margin-vector gs)
-            winner-idx (first (keep-indexed #(when (= 1.0 %2) %1) outcome))]
+            ;; take the winner straight from the engine, not by scanning the
+            ;; outcome vector for a 1.0 (that broke when the reward was blended)
+            winner-idx (state/player-index gs (get-in gs [:winner :id]))]
         {:examples (mapv (fn [{:keys [state policy seat]}]
                            {:s state :p policy
                             :v (rotate outcome seat)

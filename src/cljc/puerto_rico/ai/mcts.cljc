@@ -79,38 +79,51 @@
 ;; Outcomes and rollouts
 ;; --------------------------------------------------------------------------
 
-;; Add a configurable weight for how much the AI should care about points vs purely winning.
-;; 0.2 means winning is worth 80% of the reward pool, and total points dictate the remaining 20%.
-(def ^:const vp-weight 0.2)
-
-(defn outcome-vector
-  "Per-seat value of a state.
-   Finished game: Blends strict win/loss with a share of total victory points.
-   This 'margin of victory' signal prevents the AI from playing randomly when
-   a loss is inevitable.
-   Unfinished (rollout cap): each player's share of total victory points."
+(defn- vp-shares
+  "Each seat's share of the total victory points (uniform split if nobody has
+   scored yet)."
   [game-state]
   (let [players (:players game-state)
         n (count players)
-        ;; Calculate VPs for everyone regardless of whether the game is over
         scores (mapv #(double (state/calculate-victory-points %)) players)
-        total-score (reduce + scores)
-        ;; Calculate the proportional slice of the VP pie
-        vp-shares (if (pos? total-score)
-                    (mapv #(/ % total-score) scores)
-                    (vec (repeat n (/ 1.0 n))))]
+        total (reduce + scores)]
+    (if (pos? total)
+      (mapv #(/ % total) scores)
+      (vec (repeat n (/ 1.0 n))))))
 
-    (if (:game-over game-state)
-      ;; --- THE FIX: Blend Win/Loss with VP Margin ---
-      (let [winner-id  (get-in game-state [:winner :id])
-            win-weight (- 1.0 vp-weight)
-            win-shares (mapv #(if (= (:id %) winner-id) 1.0 0.0) players)]
-        ;; Return: (0.8 * Win_Share) + (0.2 * VP_Share)
-        (mapv (fn [w v] (+ (* win-weight w) (* vp-weight v)))
-              win-shares vp-shares))
+(defn outcome-vector
+  "Canonical per-seat game result. Finished game: 1.0 for the winner, 0.0 for
+   everyone else (the engine already broke ties, so exactly one seat is 1.0).
+   Unfinished (rollout cap): each seat's share of total victory points.
+   This stays a clean win/loss signal because it is the value-head training
+   target AND how self-play identifies the winner - do NOT blend margin in here
+   (doing so made `(= 1.0 outcome)` winner detection fail => 'winner seat null')."
+  [game-state]
+  (if (:game-over game-state)
+    (let [winner-id (get-in game-state [:winner :id])]
+      (mapv #(if (= (:id %) winner-id) 1.0 0.0) (:players game-state)))
+    (vp-shares game-state)))
 
-      ;; Game unfinished: just use the VP shares (which is already 100% VP weight)
-      vp-shares)))
+;; How much the MCTS search reward weights raw VP share vs. purely winning.
+;; 0.2 => winning is 80% of the reward, relative points the other 20%.
+(def ^:const vp-weight 0.2)
+
+(defn outcome-utility
+  "Per-seat reward that MCTS backs up. Identical to `outcome-vector` for an
+   unfinished state, but for a finished game it blends win/loss with each seat's
+   VP share (weight `vp-weight`), so the search keeps trying to shrink the gap
+   (or grow the lead) even once the win/loss is decided - the point of 'when
+   losing, still reduce the point difference'. Kept SEPARATE from
+   `outcome-vector` so winner detection and the value-head target stay pure."
+  [game-state]
+  (if (:game-over game-state)
+    (let [winner-id (get-in game-state [:winner :id])
+          win-weight (- 1.0 vp-weight)
+          shares (vp-shares game-state)]
+      (mapv (fn [p v] (+ (* win-weight (if (= (:id p) winner-id) 1.0 0.0))
+                         (* vp-weight v)))
+            (:players game-state) shares))
+    (vp-shares game-state)))
 
 (defn- random-playout [game-state max-steps]
   (loop [gs game-state, steps 0]
@@ -128,7 +141,7 @@
   (fn [game-state legal-ids]
     {:priors (let [p (/ 1.0 (max 1 (count legal-ids)))]
                (into {} (map #(vector % p) legal-ids)))
-     :value (outcome-vector (random-playout game-state max-steps))}))
+     :value (outcome-utility (random-playout game-state max-steps))}))
 
 ;; --------------------------------------------------------------------------
 ;; PUCT search
@@ -157,7 +170,7 @@
   [node gs {:keys [evaluate c-puct] :as opts}]
   (cond
     (:game-over gs)
-    [(outcome-vector gs) node]
+    [(outcome-utility gs) node]
 
     ;; unexpanded leaf: evaluate and stop
     (nil? (:P node))
@@ -168,7 +181,7 @@
     :else
     (let [ids (actions/legal-action-ids gs)]
       (if (empty? ids)
-        [(outcome-vector gs) node]
+        [(outcome-utility gs) node]
         (let [mover (actions/actor-index gs)
               id (select-action-puct node ids mover c-puct)
               gs' (actions/apply-action gs id)
