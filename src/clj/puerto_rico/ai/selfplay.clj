@@ -5,24 +5,27 @@
    the workers don't contend on a shared random generator.
 
    Usage:
-     clj -M:selfplay generate --games 50 --sims 200 --out data/selfplay.jsonl
+     clj -M:selfplay generate --games 50 --sims 200 --out data/p3-gen1.bin
      clj -M:selfplay arena    --games 20 --sims 100
 
-   Each JSONL line is one decision:
-     {\"s\": [floats]     ; encoded state, egocentric (seat 0 = the actor)
-      \"p\": [98 floats]  ; MCTS visit distribution over the action space
-      \"v\": [n floats]   ; final win/loss outcome, rotated so index 0 = actor
-      \"sm\": [n floats]} ; final SCORE MARGINS (score - table average),
-                         ; rotated so index 0 = actor; sums to 0
+   Output is a raw little-endian float32 matrix in `p<N>-<gen>-<S>-<A>.bin`, one
+   row per decision laid out as:
+     [ state (S floats)  ; encoded state, egocentric (seat 0 = the actor)
+       policy (A floats)  ; MCTS visit distribution over the action space
+       value  (N floats)  ; final win/loss outcome, rotated so index 0 = actor
+       sm     (N floats) ] ; final SCORE MARGINS (score - table average),
+                           ; rotated so index 0 = actor; sums to 0
+   S/A are in the filename and N (players) is the `p<N>-` prefix, so a reader has
+   the full column layout and windows combine by plain byte concatenation.
 
    The margin target (sm) feeds the auxiliary score-margin head: predicting how
    far ahead/behind the pack each player ends is a far richer, zero-centered
    signal than win/loss alone. It also drives the MCTS utility blend so the AI
    keeps maximizing its point lead even when the win is already decided."
   (:require [cheshire.core :as json]
-            [clj-async-profiler.core :as prof]
             [clojure.java.io :as io]
             [clojure.set :as set]
+            [clojure.string :as str]
             [puerto-rico.game.state :as state]
             [puerto-rico.game.rules :as rules]
             [puerto-rico.ai.actions :as actions]
@@ -134,12 +137,41 @@
            (mapv (fn [^java.util.concurrent.Future fut] (.get fut))))
       (finally (.shutdown pool)))))
 
+(defn- write-examples-bin!
+  "Write examples as a raw little-endian float32 matrix, one row per example laid
+   out as [state | policy | value | score-margin]. Returns [final-path stride].
+
+   The out path's extension is replaced with a `-<S>-<A>.bin` suffix so the file
+   is self-describing: S = state floats, A = policy/action floats, and the player
+   count (which fixes the value + margin widths, N each) is already in the
+   `p<N>-` filename prefix. Every generation for a given player count therefore
+   shares one row stride, so training windows are combined by plain byte concat."
+  [out examples]
+  (let [ex0    (first examples)
+        s-dim  (count (:s ex0))
+        a-dim  (count (:p ex0))
+        n      (count (:v ex0))
+        stride (+ s-dim a-dim n n)
+        base   (str/replace out #"\.(bin|jsonl)$" "")
+        final  (str base "-" s-dim "-" a-dim ".bin")
+        bb     (doto (java.nio.ByteBuffer/allocate (* 4 stride))
+                 (.order java.nio.ByteOrder/LITTLE_ENDIAN))]
+    (io/make-parents final)
+    (with-open [os (java.io.BufferedOutputStream. (java.io.FileOutputStream. final))]
+      (doseq [{:keys [s p v sm]} examples]
+        (.clear bb)
+        (doseq [x s]  (.putFloat bb (float x)))
+        (doseq [x p]  (.putFloat bb (float x)))
+        (doseq [x v]  (.putFloat bb (float x)))
+        (doseq [x sm] (.putFloat bb (float x)))
+        (.write os (.array bb) 0 (.position bb))))
+    [final stride]))
+
 (defn generate!
-  "Play games in parallel and append training examples to a JSONL file.
-   With :model set, self-play is guided by that ONNX network; otherwise it
-   uses random rollouts (generation 0)."
-  [{:keys [games out threads model] :or {threads n-cores} :as opts}]
-  (io/make-parents out)
+  "Play games in parallel and write training examples to a raw float32 .bin file
+   (see `write-examples-bin!` for the layout). With :model set, self-play is
+   guided by that ONNX network; otherwise it uses random rollouts (generation 0)."
+  [{:keys [games out threads model] :or {threads n-cores out "data/selfplay.bin"} :as opts}]
   (let [opts (assoc opts :evaluate (evaluator-for model))
         _ (println (format "Self-play with %s" (if model (str "model " model) "random rollouts")))
         t0 (System/currentTimeMillis)
@@ -152,15 +184,15 @@
                                               (count (:examples r)) (:winner-idx r) (:rounds r)))
                              r))
                          (range games))
-        total-ex (reduce + (map #(count (:examples %)) results))]
+        examples (into [] (mapcat :examples) results)
+        total-ex (count examples)]
     (println (format "Running %d games on %d threads..." games threads))
-    (with-open [w (io/writer out :append true)]
-      (doseq [r results, ex (:examples r)]
-        (.write w (json/generate-string ex))
-        (.write w "\n")))
-    (let [secs (/ (- (System/currentTimeMillis) t0) 1000.0)]
-      (println (format "\nWrote %d examples from %d games to %s in %.1fs (%.0f examples/s)"
-                       total-ex games out secs (/ total-ex secs))))))
+    (if (zero? total-ex)
+      (println "No examples generated - nothing written.")
+      (let [[final stride] (write-examples-bin! out examples)
+            secs (/ (- (System/currentTimeMillis) t0) 1000.0)]
+        (println (format "\nWrote %d examples (%d floats/row) from %d games to %s in %.1fs (%.0f examples/s)"
+                         total-ex stride games final secs (/ total-ex secs)))))))
 
 ;; --------------------------------------------------------------------------
 ;; Per-seat model play: each seat can use a different network. This is how the
@@ -278,7 +310,7 @@
 (defn -main [& [cmd & args]]
   (let [opts (set/rename-keys (parse-args args) {:sims :simulations})]
     (case cmd
-      "generate" (prof/profile (generate! (merge {:games 10 :simulations 200 :out "data/selfplay.jsonl"} opts)))
+      "generate" (generate! (merge {:games 10 :simulations 200 :out "data/selfplay.bin"} opts))
       "arena"    (arena (merge {:games 20 :simulations 100} opts))
       "versus"   (versus (merge {:games 100 :simulations 400} opts))
       (println (str "usage:\n"

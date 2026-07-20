@@ -120,9 +120,11 @@ cores. From gen 1 the network drives MCTS (~7× faster per sim), so you can rais
 ### Running a single stage
 
 ```bash
-bb selfplay --games 200 --sims 200 --out data/gen1.jsonl   # generate data (JVM)
-bb train    --data data/gen1.jsonl --out models/gen1 --epochs 3   # train a net
-bb versus   --challenger models/gen2.onnx --champion models/gen1.onnx --games 40
+# generate data (JVM). Pass a base --out; Clojure appends a -<S>-<A>.bin shape
+# suffix, e.g. data/p3-gen1-328-98.bin
+bb selfplay --games 200 --sims 200 --players 3 --out data/p3-gen1.bin
+bb train    --data data/p3-gen1-328-98.bin --out models/p3-gen1 --epochs 3
+bb versus   --challenger models/p3-gen2.onnx --champion models/p3-gen1.onnx --games 40
 bb arena    --games 20 --sims 150                          # MCTS vs heuristic
 ```
 
@@ -130,8 +132,10 @@ bb arena    --games 20 --sims 150                          # MCTS vs heuristic
 
 ## 4. Outputs and using the trained model
 
-- `data/*.jsonl`  self-play datasets (one gen per file, gitignored)
-- `models/genN.onnx` + `genN.pt`  each generation's network (gitignored)
+- `data/p<N>-gen<G>-<S>-<A>.bin`  self-play datasets: raw little-endian float32
+  matrix, rows of [state S | policy A | value N | margin N] for N players
+  (combine gens by plain byte concat) (one file per gen, gitignored)
+- `models/p<N>-gen<G>.onnx` + `.pt`  each generation's network for N players (gitignored)
 
 `train.py` writes both a PyTorch checkpoint (`.pt`, for `--resume`) and an ONNX
 export (`.onnx`, plus an `.onnx.data` weights sidecar). The **ONNX** file is what

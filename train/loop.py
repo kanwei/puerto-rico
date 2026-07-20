@@ -31,6 +31,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -59,36 +60,48 @@ def run_capture(cmd):
 
 
 def self_play(gen, champion, games, sims, players):
-    out = os.path.join(DATA, f"gen{gen}.jsonl")
+    # Clojure appends a `-<S>-<A>.bin` shape suffix, so pass a base name and
+    # glob for the actual file it wrote.
+    base = os.path.join(DATA, f"p{players}-gen{gen}")
+    for f in glob.glob(base + "-*.bin"):
+        os.remove(f)
     if gen == 1:
         games = games // 10
-    if os.path.exists(out):
-        os.remove(out)
     cmd = ["clj", "-M:selfplay", "generate",
            "--games", str(games), "--sims", str(sims),
-           "--players", str(players), "--out", out]
+           "--players", str(players), "--out", base + ".bin"]
     if champion:
         cmd += ["--model", champion]
     run(cmd)
-    return out
+    files = glob.glob(base + "-*.bin")
+    if not files:
+        raise RuntimeError(f"self-play produced no data file for {base}")
+    return files[0]
 
 
-def training_window(gen, window):
-    """Concatenate the last `window` generations of data into one training file."""
-    files = [os.path.join(DATA, f"gen{g}.jsonl")
-             for g in range(max(1, gen - window + 1), gen + 1)]
-    files = [f for f in files if os.path.exists(f)]
-    win = os.path.join(DATA, "window.jsonl")
-    with open(win, "w") as w:
+def training_window(gen, window, players):
+    """Combine the last `window` generations of data into one training file by
+    plain byte concatenation - every gen for this player count shares one row
+    stride, so the concatenated float32 stream is still a valid matrix."""
+    files = []
+    for g in range(max(1, gen - window + 1), gen + 1):
+        files += glob.glob(os.path.join(DATA, f"p{players}-gen{g}-*-*.bin"))
+    files = sorted(files)
+    if not files:
+        raise RuntimeError(f"no self-play data files for {players}p window")
+    # carry the shape suffix onto the window file so train.py can parse it
+    m = re.search(r"-(\d+-\d+)\.bin$", os.path.basename(files[0]))
+    win = os.path.join(DATA, f"p{players}-window-{m.group(1)}.bin")
+    with open(win, "wb") as w:
         for f in files:
-            with open(f) as r:
-                w.write(r.read())
+            with open(f, "rb") as r:
+                shutil.copyfileobj(r, w)
     return win
 
 
-def train(gen, resume, epochs, batch, width, blocks, device):
-    data = training_window(gen, window=5)
-    out = os.path.join(MODELS, f"gen{gen}")
+def train(gen, resume, epochs, batch, width, blocks, device, players):
+    data = training_window(gen, 5, players)
+    out = os.path.join(MODELS, f"p{players}-gen{gen}")
     # use the same interpreter running this loop (i.e. the venv python)
     cmd = [sys.executable, os.path.join(ROOT, "train", "train.py"),
            "--data", data, "--out", out,
@@ -146,7 +159,7 @@ def main():
     champion, champion_pt = None, None
     if args.start_gen > 1:
         for g in range(args.start_gen - 1, 0, -1):
-            cand = os.path.join(MODELS, f"gen{g}.onnx")
+            cand = os.path.join(MODELS, f"p{args.players}-gen{g}.onnx")
             if os.path.exists(cand):
                 champion, champion_pt = cand, cand[:-5] + ".pt"
                 print(f"resuming with champion {champion}")
@@ -159,7 +172,8 @@ def main():
 
         self_play(gen, champion, args.games, args.sims, args.players)
         cand_onnx, cand_pt = train(gen, champion_pt, args.epochs,
-                                   args.batch, args.width, args.blocks, args.device)
+                                   args.batch, args.width, args.blocks, args.device,
+                                   args.players)
         result = evaluate(cand_onnx, champion, args.eval_games,
                           args.eval_sims, args.players)
         winrate = result["winrate"]

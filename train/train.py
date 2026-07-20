@@ -11,20 +11,24 @@ Trains a residual MLP with three heads on self-play data produced by
                  blend (keep maximizing point lead even when the win is decided).
 
 Usage:
-    python train.py --data ../data/selfplay.jsonl --out ../models/pr
-    python train.py --data ../data/selfplay.jsonl --out ../models/pr \
+    python train.py --data ../data/p3-window-328-98.bin --out ../models/p3-gen1
+    python train.py --data ../data/p3-window-328-98.bin --out ../models/p3-gen1 \
         --epochs 20 --batch 512 --width 512 --blocks 6
+
+Data is a raw little-endian float32 matrix written by `clj -M:selfplay generate`
+(see load_data); the row layout is read straight from the filename shape suffix.
 
 Outputs <out>.pt (checkpoint) and <out>.onnx (for inference from Clojure
 via onnxruntime).
 """
 
 import argparse
-import json
 import math
 import os
+import re
 import time
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -78,20 +82,34 @@ class PuertoRicoNet(nn.Module):
 SCORE_SCALE = 10.0
 
 
+def parse_shape(path: str):
+    """(players N, state floats S, action floats A) from a p<N>-...-<S>-<A>.bin name."""
+    m = re.search(r"p(\d+)-.*?-(\d+)-(\d+)\.bin$", os.path.basename(path))
+    if not m:
+        raise ValueError(
+            f"cannot parse shape from '{path}'. Expected a name like "
+            "p3-window-328-98.bin (p<players>-...-<state>-<actions>.bin).")
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
 def load_data(path: str):
-    states, policies, values, margins = [], [], [], []
-    with open(path) as f:
-        for line in f:
-            ex = json.loads(line)
-            states.append(ex["s"])
-            policies.append(ex["p"])
-            values.append(ex["v"])
-            # zero-centered margins, scaled into "tens of points"
-            margins.append([m / SCORE_SCALE for m in ex["sm"]])
-    return (torch.tensor(states, dtype=torch.float32),
-            torch.tensor(policies, dtype=torch.float32),
-            torch.tensor(values, dtype=torch.float32),
-            torch.tensor(margins, dtype=torch.float32))
+    """Read the raw float32 matrix and slice each row into state/policy/value/sm.
+    Row layout: [state S | policy A | value N | score-margin N], N = players."""
+    n_players, s_dim, a_dim = parse_shape(path)
+    stride = s_dim + a_dim + 2 * n_players
+    arr = np.fromfile(path, dtype="<f4")
+    if arr.size == 0 or arr.size % stride != 0:
+        raise ValueError(
+            f"{path}: {arr.size} floats is not a whole number of rows of "
+            f"stride {stride} (S={s_dim} A={a_dim} players={n_players}).")
+    rows = arr.reshape(-1, stride)
+    s = rows[:, :s_dim]
+    p = rows[:, s_dim:s_dim + a_dim]
+    v = rows[:, s_dim + a_dim:s_dim + a_dim + n_players]
+    # zero-centered margins, scaled into "tens of points"
+    sm = rows[:, s_dim + a_dim + n_players:] / SCORE_SCALE
+    tens = lambda a: torch.from_numpy(np.ascontiguousarray(a)).float()
+    return tens(s), tens(p), tens(v), tens(sm)
 
 
 def soft_cross_entropy(logits, target):

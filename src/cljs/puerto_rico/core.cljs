@@ -1160,7 +1160,9 @@
 
 (defn setup-screen []
   (let [{:keys [num-players controllers]} @setup
-        models @available-models
+        ;; a model only works for the player count it was trained on, so only
+        ;; offer the p<N>- models that match the current table size
+        models (filter #(str/starts-with? % (str "p" num-players "-")) @available-models)
         options (concat [["Human" "human"] ["Heuristic" "heuristic"] ["MCTS (rollouts)" "mcts"]]
                         (map (fn [m] [(str/replace m #"\.onnx$" "") (str "model:" m)]) models))]
     [:div.start-screen
