@@ -79,20 +79,38 @@
 ;; Outcomes and rollouts
 ;; --------------------------------------------------------------------------
 
+;; Add a configurable weight for how much the AI should care about points vs purely winning.
+;; 0.2 means winning is worth 80% of the reward pool, and total points dictate the remaining 20%.
+(def ^:const vp-weight 0.2)
+
 (defn outcome-vector
-  "Per-seat value of a state. Finished game: 1.0 for the winner (ties split).
+  "Per-seat value of a state.
+   Finished game: Blends strict win/loss with a share of total victory points.
+   This 'margin of victory' signal prevents the AI from playing randomly when
+   a loss is inevitable.
    Unfinished (rollout cap): each player's share of total victory points."
   [game-state]
   (let [players (:players game-state)
-        n (count players)]
+        n (count players)
+        ;; Calculate VPs for everyone regardless of whether the game is over
+        scores (mapv #(double (state/calculate-victory-points %)) players)
+        total-score (reduce + scores)
+        ;; Calculate the proportional slice of the VP pie
+        vp-shares (if (pos? total-score)
+                    (mapv #(/ % total-score) scores)
+                    (vec (repeat n (/ 1.0 n))))]
+
     (if (:game-over game-state)
-      (let [winner-id (get-in game-state [:winner :id])]
-        (mapv #(if (= (:id %) winner-id) 1.0 0.0) players))
-      (let [scores (mapv #(double (state/calculate-victory-points %)) players)
-            total (reduce + scores)]
-        (if (pos? total)
-          (mapv #(/ % total) scores)
-          (vec (repeat n (/ 1.0 n))))))))
+      ;; --- THE FIX: Blend Win/Loss with VP Margin ---
+      (let [winner-id  (get-in game-state [:winner :id])
+            win-weight (- 1.0 vp-weight)
+            win-shares (mapv #(if (= (:id %) winner-id) 1.0 0.0) players)]
+        ;; Return: (0.8 * Win_Share) + (0.2 * VP_Share)
+        (mapv (fn [w v] (+ (* win-weight w) (* vp-weight v)))
+              win-shares vp-shares))
+
+      ;; Game unfinished: just use the VP shares (which is already 100% VP weight)
+      vp-shares)))
 
 (defn- random-playout [game-state max-steps]
   (loop [gs game-state, steps 0]
@@ -174,7 +192,7 @@
                             legal-ids noise))))))
 
 (def default-opts
-  {:simulations 200
+  {:simulations 300
    :c-puct 1.5
    :dirichlet-alpha 1.0
    :dirichlet-frac 0.0    ;; set to ~0.25 during self-play

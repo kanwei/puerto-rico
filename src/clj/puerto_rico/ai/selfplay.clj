@@ -276,9 +276,9 @@
 (defn -main [& [cmd & args]]
   (let [opts (set/rename-keys (parse-args args) {:sims :simulations})]
     (case cmd
-      "generate" (generate! (merge {:games 10 :simulations 200 :out "data/selfplay.jsonl"} opts))
+      "generate" (prof/profile (generate! (merge {:games 10 :simulations 200 :out "data/selfplay.jsonl"} opts)))
       "arena"    (arena (merge {:games 20 :simulations 100} opts))
-      "versus"   (versus (merge {:games 30 :simulations 100} opts))
+      "versus"   (versus (merge {:games 100 :simulations 400} opts))
       (println (str "usage:\n"
                     "  clj -M:selfplay generate --games N --sims N [--model M.onnx] [--threads N] --out FILE\n"
                     "  clj -M:selfplay arena    --games N --sims N [--threads N]        (MCTS vs heuristic)\n"
