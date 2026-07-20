@@ -217,31 +217,46 @@
 (defn current-governor [game-state]
   (get-in game-state [:players (:governor-idx game-state)]))
 
-(defn player-by-id [game-state player-id]
-  (->> (:players game-state)
-       (filter #(= (:id %) player-id))
-       first))
+(defn player-by-id
+  "Optimized: zero allocation loop instead of lazy filter."
+  [game-state player-id]
+  (let [players (:players game-state)
+        n (count players)]
+    (loop [i 0]
+      (when (< i n)
+        (let [p (nth players i)]
+          (if (= (:id p) player-id)
+            p
+            (recur (inc i))))))))
 
 (defn player-index
-  "Index of the player with the given id in the players vector, or nil"
+  "Index of the player with the given id in the players vector, or nil.
+   Optimized: O(1) vector lookups, zero allocation loop."
   [game-state player-id]
-  (->> (:players game-state)
-       (map-indexed vector)
-       (filter #(= (:id (second %)) player-id))
-       ffirst))
+  (let [players (:players game-state)
+        n (count players)]
+    (loop [i 0]
+      (when (< i n)
+        (if (= (:id (nth players i)) player-id)
+          i
+          (recur (inc i)))))))
 
 (defn city-slots-used
-  "City spaces occupied by a player's buildings; large buildings take 2 spaces"
+  "City spaces occupied by a player's buildings; large buildings take 2 spaces.
+   Optimized: Eliminated get-in array allocation overhead."
   [player]
-  (reduce (fn [slots building]
-            (+ slots (if (= (get-in buildings [(:type building) :type]) :large) 2 1)))
+  (reduce (fn [slots bldg]
+            (+ slots (if (= :large (:type (buildings (:type bldg)))) 2 1)))
           0
           (:buildings player)))
 
 (defn tiebreaker-value
-  "Rulebook tiebreaker: doubloons plus goods (1 good = 1 doubloon)"
+  "Rulebook tiebreaker: doubloons plus goods (1 good = 1 doubloon)
+   Optimized: Removed lazy (vals) sequence. Direct map lookup."
   [player]
-  (+ (:money player) (reduce + (vals (:goods player)))))
+  (let [g (:goods player)]
+    (+ (:money player)
+       (:corn g 0) (:indigo g 0) (:sugar g 0) (:tobacco g 0) (:coffee g 0))))
 
 (defn next-player-idx [game-state]
   (mod (inc (:current-player-idx game-state))
@@ -251,19 +266,38 @@
   (assoc game-state :current-player-idx (next-player-idx game-state)))
 
 (defn has-occupied-building?
-  "Check if player has an occupied building of the given type"
+  "Check if player has an occupied building of the given type
+   Optimized: Loop with early exit instead of lazy (some) closure."
   [player building-type]
-  (some #(and (= (:type %) building-type)
-              (> (:colonists %) 0)) (:buildings player)))
+  (let [bldgs (:buildings player)
+        n (count bldgs)]
+    (loop [i 0]
+      (if (< i n)
+        (let [b (nth bldgs i)]
+          (if (and (= (:type b) building-type) (pos? (:colonists b)))
+            true
+            (recur (inc i))))
+        false))))
 
 (defn count-production-buildings
-  "Count small and large production buildings in player's city"
+  "Count small and large production buildings in player's city
+   Optimized: Single-pass zero-allocation loop."
   [player]
-  (let [player-building-types (map :type (:buildings player))
-        small-production [:small-indigo-maker :small-sugar-maker]
-        large-production [:large-indigo-maker :large-sugar-maker :tobacco-maker :coffee-maker]]
-    {:small (count (filter #(some #{%} small-production) player-building-types))
-     :large (count (filter #(some #{%} large-production) player-building-types))}))
+  (let [bldgs (:buildings player)
+        n (count bldgs)]
+    (loop [i 0 small 0 large 0]
+      (if (< i n)
+        (let [t (:type (nth bldgs i))]
+          (case t
+            (:small-indigo-maker :small-sugar-maker)
+            (recur (inc i) (inc small) large)
+
+            (:large-indigo-maker :large-sugar-maker :tobacco-maker :coffee-maker)
+            (recur (inc i) small (inc large))
+
+            ;; default
+            (recur (inc i) small large)))
+        {:small small :large large}))))
 
 (defn count-filled-island-spaces
   "Count total plantations and quarries placed on player's island"
@@ -271,21 +305,32 @@
   (count (:plantations player)))
 
 (defn count-total-colonists
-  "Count total colonists on player's board (plantations + buildings + San Juan)"
+  "Count total colonists on player's board
+   Optimized: Eager reduce instead of lazy map+reduce."
   [player]
-  (let [plantation-colonists (reduce + (map :colonists (:plantations player)))
-        building-colonists (reduce + (map :colonists (:buildings player)))
-        san-juan-colonists (:san-juan-colonists player)]
-    (+ plantation-colonists building-colonists san-juan-colonists)))
+  (+ (:san-juan-colonists player)
+     (reduce (fn [sum p] (+ sum (:colonists p 0))) 0 (:plantations player))
+     (reduce (fn [sum b] (+ sum (:colonists b 0))) 0 (:buildings player))))
 
 (defn count-violet-buildings
-  "Count violet (non-production) buildings in player's city"
+  "Count violet (non-production) buildings in player's city
+   Optimized: Single-pass zero-allocation loop."
   [player]
-  (let [player-building-types (map :type (:buildings player))
-        production-buildings #{:small-indigo-maker :small-sugar-maker
-                               :large-indigo-maker :large-sugar-maker
-                               :tobacco-maker :coffee-maker}]
-    (count (remove production-buildings player-building-types))))
+  (let [bldgs (:buildings player)
+        n (count bldgs)]
+    (loop [i 0 violet 0]
+      (if (< i n)
+        (let [t (:type (nth bldgs i))]
+          (case t
+            ;; If it's a production building, do nothing
+            (:small-indigo-maker :small-sugar-maker
+             :large-indigo-maker :large-sugar-maker
+             :tobacco-maker :coffee-maker)
+            (recur (inc i) violet)
+
+            ;; Else, it's a violet building
+            (recur (inc i) (inc violet))))
+        violet))))
 
 (defn calculate-large-building-bonuses
   "Calculate bonus victory points from occupied large buildings"
