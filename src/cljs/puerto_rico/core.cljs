@@ -72,19 +72,24 @@
   ;; :prospector-2 is the second prospector placard in 5-player games
   (str/replace (name role) #"-2$" ""))
 
-(defn add-log-entry [message & [player-name stats]]
+(defn add-log-entry [message & [player-name stats snapshot]]
   (let [current-game (:game-state @game-state)
         round-num (:round current-game 1)
         current-player-idx (:current-player-idx current-game)
-        players-count (count (:players current-game))
-        ;; Calculate turn number within round (1-based)
+        ;; Calculate turn number within round (1-based) from the acting state
         turn-num (if current-player-idx (inc current-player-idx) 1)
         turn-label (str round-num "." turn-num)
         entry {:turn                turn-label
                :message             message
                :player              player-name
                :stats               stats                    ; AI search diagnostics (nil for humans)
-               :game-state-snapshot current-game            ; Store the game state before this move
+               ;; Snapshot = the state AFTER this action, so reviewing an entry
+               ;; shows its result. Callers that log before applying the move
+               ;; (the common case) leave this ::pending; the game-state watch
+               ;; backfills it with the resulting state on the next change.
+               ;; Callers that log after the state is already applied (new game,
+               ;; auto-fills) pass the snapshot explicitly.
+               :game-state-snapshot (or snapshot ::pending)
                :timestamp           (.getTime (js/Date.))}]
     (swap! game-log conj entry)))
 ;; No limit - keep all entries to see start of game
@@ -97,17 +102,44 @@
   "Return to viewing the current game state"
   (swap! historical-view assoc :active false :state-index nil))
 
+(defn step-history
+  "Arrow-key navigation across the game log. dir -1 = older, +1 = newer. The
+   live (current) state is treated as one step past the last log entry."
+  [dir]
+  (let [n (count @game-log)]
+    (when (pos? n)
+      (let [cur (if (:active @historical-view) (:state-index @historical-view) n)
+            nxt (+ cur dir)]
+        (cond
+          (< nxt 0)  (view-historical-state 0)
+          (>= nxt n) (return-to-current-state)
+          :else      (view-historical-state nxt))))))
+
+;; Left/Right arrows step through logged states (defonce so hot reload doesn't
+;; stack duplicate listeners). Ignored while typing in a form control.
+(defonce keyboard-history-nav
+  (do (.addEventListener
+       js/document "keydown"
+       (fn [e]
+         (when-not (#{"INPUT" "SELECT" "TEXTAREA"} (some-> (.-target e) .-tagName))
+           (case (.-key e)
+             "ArrowLeft"  (do (.preventDefault e) (step-history -1))
+             "ArrowRight" (do (.preventDefault e) (step-history 1))
+             nil))))
+      true))
+
 (defn get-display-game-state []
   "Get the game state that should be displayed (current or historical).
    Pure - AI turns are driven by a watch on game-state, never by rendering."
   (if (:active @historical-view)
     ;; Return historical state
     (let [log-index (:state-index @historical-view)
-          log-entries @game-log]
-      (if (and log-index (< log-index (count log-entries)))
-        {:game-state (:game-state-snapshot (nth log-entries log-index))
-         :historical true
-         :log-index  log-index}
+          log-entries @game-log
+          snap (when (and log-index (< log-index (count log-entries)))
+                 (:game-state-snapshot (nth log-entries log-index)))]
+      ;; snap is ::pending only in the brief window before its move is applied
+      (if (map? snap)
+        {:game-state snap :historical true :log-index log-index}
         @game-state))
     ;; Return current state
     {:game-state (:game-state @game-state)
@@ -127,13 +159,21 @@
                                    :controller c)))
                       (range num-players)
                       controllers)]
-    (add-log-entry (str "New game — " num-players " players"))
     (state/new-game-state players)))
+
+(defn new-game!
+  "Start a fresh game. Install the new state FIRST, then log 'New game' - so the
+   entry snapshots the new game (round 1), not the just-finished one (whose
+   snapshot would send you back to the victory screen when clicked)."
+  [num-players controllers]
+  (return-to-current-state)
+  (swap! game-state assoc :game-state (create-configured-game num-players controllers))
+  ;; logged after the new state is installed: snapshot it explicitly
+  (add-log-entry (str "New game — " num-players " players") nil nil (:game-state @game-state)))
 
 (defn start-configured-game! []
   (let [{:keys [num-players controllers]} @setup]
-    (swap! game-state assoc :game-state
-           (create-configured-game num-players (take num-players controllers)))))
+    (new-game! num-players (take num-players controllers))))
 
 ;; Helper functions
 (defn current-player [game-data]
@@ -568,17 +608,35 @@
                    new-log (get-in new-val [:game-state :mayor-auto-fill-log] [])]
                (when (> (count new-log) (count old-log))
                  (doseq [{:keys [player spaces]} (subvec new-log (count old-log))]
+                   ;; logged after the state is applied: snapshot it explicitly
                    (add-log-entry (str "Filled all " spaces (if (= spaces 1) " space" " spaces")
                                        " automatically")
-                                  player))))))
+                                  player nil (:game-state new-val)))))))
+
+;; Backfill each log entry's snapshot with the state its action produced. Entries
+;; logged before the move is applied carry ::pending; the next state change is
+;; that move's result, so we stamp it in. Entries with an explicit snapshot
+;; (new game, auto-fills) are left untouched.
+(add-watch game-state :snapshot-filler
+           (fn [_ _ old-val new-val]
+             (when (not= (:game-state old-val) (:game-state new-val))
+               (let [g (:game-state new-val)]
+                 (swap! game-log
+                        (fn [log]
+                          (mapv #(if (= (:game-state-snapshot %) ::pending)
+                                   (assoc % :game-state-snapshot g)
+                                   %)
+                                log)))))))
 
 ;; --------------------------------------------------------------------------
 ;; Visual helpers
 ;; --------------------------------------------------------------------------
 
+;; Distinct hues so goods are easy to tell apart at a glance:
+;; corn yellow, indigo blue, sugar white, tobacco green, coffee dark red, quarry gray
 (def good-color
-  {:coffee "#5c3d2e" :corn "#b3982f" :indigo "#3b4d7a"
-   :sugar "#cdb67c" :tobacco "#7a3f38" :quarry "#8f8b84"})
+  {:coffee "#8a2b2b" :corn "#dfb02a" :indigo "#3b4d7a"
+   :sugar "#ffffff" :tobacco "#4f7a43" :quarry "#8f8b84"})
 
 (defn titlecase [s]
   (str/join " " (map str/capitalize (str/split (str/replace (name s) "-" " ") #" "))))
@@ -932,15 +990,26 @@
        [:h2 "Role Execution"]
        [:p "Role " (name selected-role) " is being executed..."]])))
 
-(defn worker-slots-display [occupied total]
-  "Display worker slots as filled/empty circles"
-  (let [filled (repeat occupied "●")
-        empty (repeat (- total occupied) "○")]
-    (str (apply str filled) (apply str empty))))
-
 (defn get-building-capacity [building-type]
   "Get the worker capacity for a building type"
   (get-in state/buildings [building-type :worker] 1))
+
+(defn cargo-ship
+  "A cargo ship as a box of capacity slots that fill with the loaded good's
+   color, with a label underneath naming the current cargo."
+  [ship]
+  (let [cap (:capacity ship 0)
+        amt (:amount ship 0)
+        good (:good ship)]
+    [:div.cargo-ship
+     [:div.ship-slots
+      (for [i (range cap)]
+        ^{:key i}
+        [:span.ship-slot {:class (when (< i amt) "filled")
+                          :style (when (< i amt)
+                                   {:background-color (get good-color good "#8f8b84")})}])]
+     [:div.ship-label
+      (if good (str (name good) " " amt "/" cap) (str "empty · " cap))]]))
 
 (defn player-board [player current?]
   (let [me? (not (:is-ai player))
@@ -950,11 +1019,8 @@
      [:div.player-card-head
       [:span.player-name (:name player)]
       [:span.badge {:class (if me? "badge-you" "badge-ai")}
-       (cond (and current? me?) "You · to act"
-             me? "You"
-             ;; bots show their controller (model name / MCTS / heuristic)
-             :else (str (controller-label (:controller player))
-                        (when current? " · to act")))]
+       ;; the active player's card is already highlighted, so no "to act" text
+       (if me? "You" (controller-label (:controller player)))]
       [:div.player-badges
        [:span.stat-badge.money {:title "Doubloons"} (str "$" (:money player))]
        [:span.stat-badge.vp {:title "Victory points"} (:victory-points player) " VP"]
@@ -972,6 +1038,7 @@
                                       (group-by :type (:plantations player)))]
            ^{:key ptype}
            [:div.tile-row
+            [dot ptype]
             [:span.tile-name (name ptype)]
             [worker-pips (count (filter #(pos? (:colonists % 0)) tiles)) (count tiles)]])]])
 
@@ -982,9 +1049,12 @@
          (for [[idx b] (map-indexed vector (:buildings player))]
            (let [cap (get-building-capacity (:type b))
                  vp (get-in state/buildings [(:type b) :vp] 0)
-                 special (state/special-vp-for-building player (:type b))]
+                 special (state/special-vp-for-building player (:type b))
+                 ;; production buildings are green; all others (violet) are purple
+                 prod? (= (get-in state/buildings [(:type b) :type]) :production)]
              ^{:key idx}
-             [:div.tile-row.has-tip {:data-tip (building-description (:type b))}
+             [:div.tile-row.has-tip {:class (if prod? "bldg-green" "bldg-purple")
+                                     :data-tip (building-description (:type b))}
               [:span.tile-name (titlecase (:type b))]
               [:span.tile-row-right
                (when (pos? vp)
@@ -1000,7 +1070,7 @@
         [:div.section-label "Goods"]
         [:div.good-tags
          (for [[good amount] (sort-by #(get rules/good-values (first %) 99) goods)]
-           ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count amount]])]])]))
+           ^{:key good} [:span.good-tag [dot good] (titlecase good) [:span.good-count amount]])]])]))
 
 (defn- fmt-pct [x] (str (js/Math.round (* 100 x)) "%"))
 
@@ -1081,11 +1151,11 @@
            [:td.total-points (get-in player [:vp-breakdown :total-vps])]])]]]
 
      [:div.game-over-actions
-      [:button.new-game {:on-click #(swap! game-state assoc :game-state (create-configured-game
-                                                                         (:num-players @setup)
-                                                                         (take (:num-players @setup) (:controllers @setup))))}
+      [:button.new-game {:on-click #(new-game! (:num-players @setup)
+                                               (take (:num-players @setup) (:controllers @setup)))}
        "Rematch"]
-      [:button.ai-game {:on-click #(swap! game-state assoc :game-state nil)}
+      [:button.ai-game {:on-click #(do (return-to-current-state)
+                                       (swap! game-state assoc :game-state nil))}
        "New setup"]]]))
 
 (defn setup-screen []
@@ -1146,79 +1216,89 @@
                             current-player-data (:name current-player-data)
                             :else "—")]
         [:div.board
-         ;; Historical state indicator
+         ;; Historical state indicator: shows the action taken from this state
+         ;; (and its search stats) so you can step through games to debug them
          (when is-historical
-           [:div.historical-banner
-            "Viewing historical state — log entry #" (:log-index display-state)])
+           (let [idx (:log-index display-state)
+                 entry (nth @game-log idx nil)]
+             [:div.historical-banner
+              [:span.hist-hint "← → to step"]
+              [:span.hist-loc (str "#" idx " · " (:turn entry))]
+              (when (:player entry) [:span.hist-player (str (:player entry) ":")])
+              [:span.hist-action (:message entry)]
+              (when (:stats entry)
+                [:span.hist-stats (ai-stats-text (:game-state-snapshot entry) (:stats entry))])
+              [:button.back-to-current {:on-click return-to-current-state} "back to current"]]))
 
          ;; Header panel
          [:div.board-header
+          ;; Row 1: title + round, VP/colonists/ship readouts inline, phase/turn right
           [:div.header-top
            [:div.title-block
             [:h1.game-title "Puerto Rico"]
-            [:span.round-label (str "Round " (:round game-data))]]
+            [:span.round-label (str "Round " (:round game-data))]
+            [:div.header-readouts
+             [:span.readout [:span.readout-num (:victory-point-supply game-data)]
+              [:span.readout-label "VP pool"]]
+             [:span.readout [:span.readout-num (:colonist-supply game-data)]
+              [:span.readout-label "Colonists"]]
+             [:span.readout [:span.readout-num (get game-data :colonist-ship 0)]
+              [:span.readout-label "Ship"]]
+             [:span.readout [:span.readout-num (count (:plantation-supply game-data))]
+              [:span.readout-label "Deck"]]
+             [:span.readout [:span.readout-num (count (:plantation-discard game-data))]
+              [:span.readout-label "Discard"]]]]
            [:div.header-meta
             [:span.meta-label "Phase"]
             [:span.phase-pill phase-label]
             [:span.meta-sep]
-            [:span.meta-label "Current turn"]
+            [:span.meta-label "Turn"]
             [:span.meta-value turn-name]]]
 
-          [:div.header-stats
-           [:div.stat-block
-            [:span.stat-label "VP pool"]
-            [:span.stat-num (:victory-point-supply game-data)]]
-           [:div.stat-block
-            [:span.stat-label "Colonists"]
-            [:span.stat-num (:colonist-supply game-data)]]
-           [:div.stat-block
-            [:span.stat-label "Ship"]
-            [:span.stat-num (get game-data :colonist-ship 0)]]
-           [:div.stat-block
-            [:span.stat-label "Quarries"]
-            [:span.stat-num (get game-data :quarry-supply 0)]]
-           [:div.stat-block.stat-wide
+          ;; Row 2: plantations (with quarry pill), cargo ships, trading house, goods supply
+          [:div.header-resources
+           [:div.supply-block
             [:span.stat-label "Plantations available"]
             [:div.chip-row
              (for [[ptype n] (sort-by (comp name first) (frequencies (:face-up-plantations game-data)))]
                ^{:key ptype}
-               [:span.chip [dot ptype] (name ptype) (when (> n 1) (str " ×" n))])
-             [:span.chip-muted (str "deck " (count (:plantation-supply game-data))
-                                    " · discard " (count (:plantation-discard game-data)))]]]]
-
-          [:div.header-supply
-           ;; left: cargo ships + trading house
+               [:span.chip [dot ptype] (titlecase ptype) (when (> n 1) (str " ×" n))])
+             (when (pos? (:quarry-supply game-data 0))
+               [:span.chip [dot :quarry] "Quarry"
+                (when (> (:quarry-supply game-data) 1) (str " ×" (:quarry-supply game-data)))])]]
            [:div.supply-block
             [:span.stat-label "Cargo ships"]
-            [:div.chip-row
+            [:div.ships-row
              (for [[idx ship] (map-indexed vector (:ships game-data))]
-               ^{:key idx}
-               [:span.chip
-                (if (:good ship)
-                  [:span [dot (:good ship)] (str (name (:good ship)) " " (:amount ship 0) " / " (:capacity ship 0))]
-                  (str "empty / " (:capacity ship 0)))])]]
-           (when (seq (:trading-house game-data))
-             [:div.supply-block
-              [:span.stat-label "Trading house"]
-              [:div.chip-row
+               ^{:key idx} [cargo-ship ship])]]
+           [:div.supply-block
+            [:span.stat-label "Trading house"]
+            [:div.chip-row
+             (if (seq (:trading-house game-data))
                (for [[idx item] (map-indexed vector (:trading-house game-data))]
                  (let [g (if (map? item) (:good item) item)]
-                   ^{:key idx} [:span.chip [dot g] (name g)]))]])
-           ;; right: goods in supply
+                   ^{:key idx} [:span.chip [dot g] (titlecase g)]))
+               [:span.chip-muted "Empty"])]]
            [:div.supply-block.supply-goods
             [:span.stat-label "Goods in supply"]
-            [:div.good-tags
+            [:div.supply-goods-list
              (for [[good n] (sort-by #(get rules/good-values (first %) 99) (:goods-supply game-data))]
-               ^{:key good} [:span.good-tag [dot good] (name good) [:span.good-count n]])]]]]
+               ^{:key good}
+               [:span.supply-good [dot good] (titlecase good) [:span.good-count n]])]]]]
 
-         ;; Players (highlight the player who must actually act now)
-         (let [acting-idx (if (= (:phase game-data) :role-execution)
+         ;; Players: highlight whoever must act now — or, in historical view, the
+         ;; player whose action produced the entry being viewed
+         (let [hist-actor (when is-historical
+                            (:player (nth @game-log (:log-index display-state) nil)))
+               acting-idx (if (= (:phase game-data) :role-execution)
                             (:role-execution-current-idx game-data)
                             (:current-player-idx game-data))]
            [:div.players-row
             (for [[idx player] (map-indexed vector (:players game-data))]
               ^{:key (:id player)}
-              [player-board player (= idx acting-idx)])])
+              [player-board player (if hist-actor
+                                     (= (:name player) hist-actor)
+                                     (= idx acting-idx))])])
 
          ;; Full-width action panel (buildings get room to lay out like the board)
          [:div.action-panel
