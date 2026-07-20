@@ -325,9 +325,10 @@
    simpler for the search, and it lets them freely re-arrange. Auto-resolved
    when there is no real choice (hand covers every circle, or nothing to do).
 
-   Human players keep their existing placement and just receive the newly
-   arrived colonists in hand; they add/remove workers by clicking, so we stop
-   for their decision whenever they have colonists to place.
+   Human players keep their existing board placement and receive the newly
+   arrived colonists plus any leftover San Juan colonists in hand;
+   they add/remove workers by clicking, so we stop for their decision
+   whenever they have colonists to place.
 
    Refill the ship and end the role when nobody is left."
   [game-state order-position]
@@ -353,11 +354,20 @@
                                                      {:player (:name player) :spaces circles}))
                                          (inc pos))
                 :else (assoc gs :role-execution-current-idx idx)))
-            ;; Human: keep the board, stop for an interactive turn if they have
-            ;; colonists in hand (otherwise nothing to place - skip)
-            (let [hand (get-in gs [:players idx :colonists-in-hand])]
-              (if (pos? hand)
-                (assoc gs :role-execution-current-idx idx)
+            ;; Human: keep the board, move SJ colonists to hand so they become
+            ;; available for re-placement, then stop for an interactive turn if
+            ;; they have colonists (otherwise nothing to do - skip)
+            ;; Human: keep the board, move SJ colonists to hand so they become
+            ;; available for re-placement, then stop for an interactive turn if
+            ;; they have colonists (otherwise nothing to do - skip)
+            (let [player (get-in gs [:players idx])
+                  total-hand (+ (:colonists-in-hand player 0)
+                                (:san-juan-colonists player 0))]
+              (if (pos? total-hand)
+                (-> gs
+                    (assoc-in [:players idx :colonists-in-hand] total-hand)
+                    (assoc-in [:players idx :san-juan-colonists] 0)
+                    (assoc :role-execution-current-idx idx))
                 (recur (finish-mayor-turn gs idx) (inc pos))))))))))
 
 (defn building-cost
