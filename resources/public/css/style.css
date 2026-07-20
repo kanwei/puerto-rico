@@ -200,15 +200,25 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
   font-variant-numeric: tabular-nums; text-transform: capitalize;
 }
 
+/* trading house: 4 colored slots like cargo ships */
+.trading-house-slots { display: flex; gap: 3px; padding: 4px; background: #f6f4ee; border: 1px solid var(--border-2); border-radius: 6px; }
+.th-slot {
+  width: 20px; height: 20px;
+  border-radius: 4px;
+  border: 1px solid var(--border-2);
+  background: transparent;
+}
+.th-slot.filled { border-color: rgba(0, 0, 0, 0.2); }
+
 /* ---- players -------------------------------------------------------------- */
 
 .players-row {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  display: flex;
   gap: 10px;
 }
-
 .player-card {
+  flex: 1;
+  min-width: 0;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -237,6 +247,8 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
 .badge-ai { background: #eceae2; color: var(--muted); }
 .badge-you { background: var(--sage-tint); color: var(--sage-deep); }
 
+.governor-crown { font-size: 16px; margin: 0 2px; }
+
 /* compact stat badges pushed to the right of the player name */
 .player-badges { margin-left: auto; display: flex; gap: 5px; align-items: center; }
 .stat-badge {
@@ -253,6 +265,7 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
 .stat-badge.vp { background: #f0e2df; color: var(--rust); }
 
 .card-section { display: flex; flex-direction: column; gap: 4px; }
+.section-label { display: flex; align-items: center; gap: 8px; }
 .tile-list { display: flex; flex-direction: column; gap: 3px; }
 .tile-row {
   display: flex;
@@ -267,6 +280,14 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
 .tile-name { font-weight: 600; text-transform: capitalize; }
 .tile-status { margin-left: auto; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .tile-row .pips { margin-left: auto; }
+
+.sj-dot {
+  display: inline-block;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--sage); border: 1px solid var(--sage-deep);
+  margin-left: 4px; vertical-align: middle;
+}
+.sj-dots { display: inline-flex; align-items: center; }
 
 /* building rows tinted by category: production green, violet (special) purple */
 .tile-row.bldg-green { background: #e7efe0; border-color: #cedcc2; }
@@ -300,7 +321,7 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
   color: #f6f4ee;
   font-size: 12px; font-weight: 400;
   line-height: 1.42; text-transform: none; letter-spacing: normal;
-  text-align: left; white-space: normal;
+  text-align: left; white-space: pre-line;
   padding: 9px 11px; border-radius: 8px;
   box-shadow: 0 8px 24px rgba(40, 38, 30, 0.28);
   pointer-events: none;
@@ -583,9 +604,11 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
   text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--label); font-weight: 700; padding: 6px 10px; border-bottom: 1px solid var(--border);
 }
-.scores-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
-.scores-table .player-name { font-family: var(--serif); font-weight: 600; }
+.scores-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; text-align: right; }
+.scores-table .player-name { font-family: var(--serif); font-weight: 600; text-align: left; }
 .scores-table .total-points { font-weight: 700; }
+.scores-table th { text-align: right; }
+.scores-table th:first-child { text-align: left; }
 .winner-row { background: var(--sage-tint-2); }
 .game-over-actions { display: flex; gap: 10px; margin-top: 6px; }
 .game-over-actions button, .start-button {
@@ -675,10 +698,7 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
 @media (max-width: 1000px) {
   .building-columns { grid-template-columns: repeat(2, 1fr); }
 }
-@media (max-width: 1100px) {
-  .players-row { grid-template-columns: repeat(3, 1fr); }
-}
 @media (max-width: 700px) {
-  .players-row { grid-template-columns: 1fr; }
+  .players-row { flex-direction: column; }
   .roles-grid { grid-template-columns: repeat(2, 1fr); }
 }

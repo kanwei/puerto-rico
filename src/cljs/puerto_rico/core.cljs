@@ -1011,30 +1011,40 @@
      [:div.ship-label
       (if good (str (name good) " " amt "/" cap) (str "empty · " cap))]]))
 
-(defn player-board [player current?]
-  (let [me? (not (:is-ai player))
+(defn player-board [player current? governor-idx]
+  (let [player-idx (:id player) ;; 1-based, subtract 1 for 0-based
+        me? (not (:is-ai player))
         san-juan (get player :san-juan-colonists 0)
+        is-governor (= (dec player-idx) governor-idx)
+        total-vp (state/calculate-victory-points player)
         goods (filter #(pos? (second %)) (:goods player))]
     [:div.player-card {:class (when current? "active")}
      [:div.player-card-head
       [:span.player-name (:name player)]
-      [:span.badge {:class (if me? "badge-you" "badge-ai")}
-       ;; the active player's card is already highlighted, so no "to act" text
-       (if me? "You" (controller-label (:controller player)))]
+      (when is-governor [:span.governor-crown "👑"])
       [:div.player-badges
        [:span.stat-badge.money {:title "Doubloons"} (str "$" (:money player))]
-       [:span.stat-badge.vp {:title "Victory points"} (:victory-points player) " VP"]
-       [:span.stat-badge {:title "City slots used (large buildings take 2 of 12)"}
-        (state/city-slots-used player) "/12"]
-       (when (pos? san-juan)
-         [:span.stat-badge {:title "Colonists in San Juan"} san-juan " SJ"])]]
+       (let [breakdown (state/calculate-victory-points-breakdown player)]
+         [:span.stat-badge.vp.has-tip
+          {:data-tip (str "Shipping: " (get breakdown :shipping-vps 0) " VP\n"
+                          "Buildings: " (get breakdown :building-vps 0) " VP\n"
+                          "Building effects: " (get breakdown :large-building-bonuses 0) " VP\n"
+                          "─────────────────\n"
+                          "Total: " (get breakdown :total-vps 0) " VP")}
+          total-vp " VP"])]]
 
      (when (seq (:plantations player))
        [:div.card-section
-        [:div.section-label "Plantations"]
+        [:div.section-label
+         "Plantations"
+         (when (pos? san-juan)
+           [:span.sj-dots {:style {:margin-left "auto"}}
+            (for [i (range san-juan)]
+              ^{:key (str "sj-" i)} [:span.sj-dot])])]
         [:div.tile-list
-         ;; one row per plantation TYPE, with a worked/total worker pip each
-         (for [[ptype tiles] (sort-by #(get rules/good-values (first %) 99)
+         ;; quarries first, then by production cost (corn → coffee)
+         (for [[ptype tiles] (sort-by (juxt (fn [x] (if (= x :quarry) 0 1))
+                                            #(get rules/good-values % 99))
                                       (group-by :type (:plantations player)))]
            ^{:key ptype}
            [:div.tile-row
@@ -1044,7 +1054,10 @@
 
      (when (seq (:buildings player))
        [:div.card-section
-        [:div.section-label "Buildings"]
+        [:div.section-label
+         "Buildings"
+         [:span.stat-badge {:title "City slots used (large buildings take 2 of 12)"}
+          (state/city-slots-used player) "/12"]]
         [:div.tile-list
          (for [[idx b] (map-indexed vector (:buildings player))]
            (let [cap (get-building-capacity (:type b))
@@ -1140,6 +1153,7 @@
          [:th "Player"]
          [:th "🚢 Ship"]
          [:th "🏛️ Build"]
+         [:th "✦ Effects"]
          [:th "Total VP"]]]
        [:tbody
         (for [player sorted-players]
@@ -1148,6 +1162,7 @@
            [:td.player-name (:name player)]
            [:td.ship-points (get-in player [:vp-breakdown :shipping-vps])]
            [:td.building-points (get-in player [:vp-breakdown :building-vps])]
+           [:td.effect-points (get-in player [:vp-breakdown :large-building-bonuses])]
            [:td.total-points (get-in player [:vp-breakdown :total-vps])]])]]]
 
      [:div.game-over-actions
@@ -1257,17 +1272,8 @@
             [:span.meta-label "Turn"]
             [:span.meta-value turn-name]]]
 
-          ;; Row 2: plantations (with quarry pill), cargo ships, trading house, goods supply
+          ;; Row 2: cargo ships, trading house, plantations, goods supply
           [:div.header-resources
-           [:div.supply-block
-            [:span.stat-label "Plantations available"]
-            [:div.chip-row
-             (for [[ptype n] (sort-by (comp name first) (frequencies (:face-up-plantations game-data)))]
-               ^{:key ptype}
-               [:span.chip [dot ptype] (titlecase ptype) (when (> n 1) (str " ×" n))])
-             (when (pos? (:quarry-supply game-data 0))
-               [:span.chip [dot :quarry] "Quarry"
-                (when (> (:quarry-supply game-data) 1) (str " ×" (:quarry-supply game-data)))])]]
            [:div.supply-block
             [:span.stat-label "Cargo ships"]
             [:div.ships-row
@@ -1275,12 +1281,24 @@
                ^{:key idx} [cargo-ship ship])]]
            [:div.supply-block
             [:span.stat-label "Trading house"]
+            [:div.trading-house-slots
+             (for [i (range 4)]
+               (let [item (nth (:trading-house game-data) i nil)
+                     g (when (map? item) (:good item))]
+                 ^{:key i}
+                 [:span.th-slot {:class (when g "filled")
+                                 :style (when g
+                                          {:background-color (get good-color g "#8f8b84")})}]))]]
+           [:div.supply-block
+            [:span.stat-label "Plantations available"]
             [:div.chip-row
-             (if (seq (:trading-house game-data))
-               (for [[idx item] (map-indexed vector (:trading-house game-data))]
-                 (let [g (if (map? item) (:good item) item)]
-                   ^{:key idx} [:span.chip [dot g] (titlecase g)]))
-               [:span.chip-muted "Empty"])]]
+             ;; Quarries first, then by production cost (corn → coffee)
+             (when (pos? (:quarry-supply game-data 0))
+               [:span.chip.quarry-chip [dot :quarry] "Quarry"
+                (when (> (:quarry-supply game-data) 1) (str " ×" (:quarry-supply game-data)))])
+             (for [[ptype n] (sort-by (comp #(get rules/good-values % 99) first) (frequencies (:face-up-plantations game-data)))]
+               ^{:key ptype}
+               [:span.chip [dot ptype] (titlecase ptype) (when (> n 1) (str " ×" n))])]]
            [:div.supply-block.supply-goods
             [:span.stat-label "Goods in supply"]
             [:div.supply-goods-list
@@ -1300,7 +1318,8 @@
               ^{:key (:id player)}
               [player-board player (if hist-actor
                                      (= (:name player) hist-actor)
-                                     (= idx acting-idx))])])
+                                     (= idx acting-idx))
+               (:governor-idx game-data)])])
 
          ;; Full-width action panel (buildings get room to lay out like the board)
          [:div.action-panel
