@@ -125,23 +125,34 @@
             (:players game-state) shares))
     (vp-shares game-state)))
 
-(defn- random-playout [game-state max-steps]
+(defn random-playout-policy
+  "Default playout policy: pick a uniformly random legal action id."
+  [_game-state legal-ids]
+  (drand-nth legal-ids))
+
+(defn- playout
+  "Simulate to a terminal state (or max-steps) choosing each move with `policy`,
+   a fn (game-state, legal-ids) -> chosen-id."
+  [game-state max-steps policy]
   (loop [gs game-state, steps 0]
     (if (or (:game-over gs) (>= steps max-steps))
       gs
       (let [ids (actions/legal-action-ids gs)]
         (if (empty? ids)
           gs
-          (recur (actions/apply-action gs (drand-nth ids)) (inc steps)))))))
+          (recur (actions/apply-action gs (policy gs ids)) (inc steps)))))))
 
 (defn rollout-evaluator
-  "Evaluator that plays the game out with uniformly random actions.
-   Uniform priors; value from the playout's outcome."
-  [& {:keys [max-steps] :or {max-steps 600}}]
+  "Evaluator that plays the game out and backs up the playout's outcome. Uniform
+   priors. `playout-policy` chooses the moves in the playout (default: uniformly
+   random). A stronger (e.g. heuristic) policy gives a far better value estimate
+   for games like this one, where a random playout can't tell that an action
+   (taking a plantation, building) actually helps."
+  [& {:keys [max-steps playout-policy] :or {max-steps 600 playout-policy random-playout-policy}}]
   (fn [game-state legal-ids]
     {:priors (let [p (/ 1.0 (max 1 (count legal-ids)))]
                (into {} (map #(vector % p) legal-ids)))
-     :value (outcome-utility (random-playout game-state max-steps))}))
+     :value (outcome-utility (playout game-state max-steps playout-policy))}))
 
 ;; --------------------------------------------------------------------------
 ;; Heuristic prior blending

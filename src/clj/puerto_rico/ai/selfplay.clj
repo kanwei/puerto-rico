@@ -41,20 +41,64 @@
                               (range n))))
 
 ;; --------------------------------------------------------------------------
-;; Evaluators: a model spec is nil / "rollout" (random playouts) or a path to
-;; an ONNX model. Loaded models are cached so a champion shared across seats
-;; and games opens exactly one ONNX session.
+;; Evaluators: a model spec is nil / "rollout" (playout MCTS) or a path to an
+;; ONNX model. Loaded models are cached so a champion shared across seats and
+;; games opens exactly one ONNX session.
 ;; --------------------------------------------------------------------------
 
 (def ^:private model-cache (atom {}))
 
+(defn- weighted-choice
+  "Pick a key from a {key weight} map with probability proportional to weight,
+   using the per-thread RNG."
+  [m]
+  (let [entries (seq m)
+        total (reduce + 0.0 (map second entries))
+        r (* (mcts/drand) total)]
+    (loop [acc 0.0, [[k w] & more] entries]
+      (if (or (nil? more) (>= (+ acc w) r)) k (recur (+ acc w) more)))))
+
+(defn heuristic-playout-policy
+  "Playout move-selector that samples proportionally to the heuristic's action
+   scores where it has an opinion (settler takes, builder builds, mayor
+   placements - exactly the decisions whose long-horizon value a random playout
+   can't see), and falls back to a uniform random legal move elsewhere. Uses
+   `actions/heuristic-action-scores` (id-keyed, allocation-light, and - unlike
+   the full heuristic move-selectors - it does NOT print, so it is safe in the
+   hot playout loop)."
+  [game-state legal-ids]
+  (if-let [scores (actions/heuristic-action-scores game-state)]
+    (weighted-choice scores)
+    (mcts/drand-nth legal-ids)))
+
+(defn- rollout-spec? [spec]
+  (or (nil? spec) (#{"rollout" "random" "heuristic"} spec)))
+
 (defn evaluator-for
-  "MCTS evaluator for a model spec (nil/'rollout' -> random rollouts)"
-  [spec]
-  (if (or (nil? spec) (= spec "rollout"))
-    (mcts/blend-heuristic-priors (mcts/rollout-evaluator) {})
-    (nn/evaluator (or (get @model-cache spec)
-                      (get (swap! model-cache assoc spec (nn/load-model spec)) spec)))))
+  "MCTS evaluator for a model spec. Rollout specs (nil / \"rollout\" / \"random\"
+   / \"heuristic\") give a playout evaluator; anything else is an ONNX model path.
+
+   opts:
+     :utility-c  score-margin weight for NN search (U = win-prob + c*margin); a
+                 larger c lets the dense, reliable margin head drive the search.
+                 nil = nn's own default (0.05). Ignored for rollouts.
+     :rollout    :random (default) or :heuristic - the playout policy for rollout
+                 evaluators. Heuristic playouts give a far better value estimate
+                 for this game (a random playout can't tell that taking a
+                 plantation / building actually helps). spec \"heuristic\"/\"random\"
+                 force the kind regardless of :rollout."
+  ([spec] (evaluator-for spec nil))
+  ([spec {:keys [utility-c rollout] :or {rollout :random}}]
+   (if (rollout-spec? spec)
+     (let [kind (case spec "heuristic" :heuristic, "random" :random, rollout)
+           policy (if (= kind :heuristic)
+                    heuristic-playout-policy
+                    mcts/random-playout-policy)]
+       (mcts/blend-heuristic-priors
+        (mcts/rollout-evaluator :playout-policy policy) {}))
+     (nn/evaluator (or (get @model-cache spec)
+                       (get (swap! model-cache assoc spec (nn/load-model spec)) spec))
+                   (when utility-c {:utility-c utility-c})))))
 
 (defn- dense-policy [visits]
   (let [total (double (max 1 (reduce + (vals visits))))]
@@ -170,10 +214,16 @@
 (defn generate!
   "Play games in parallel and write training examples to a raw float32 .bin file
    (see `write-examples-bin!` for the layout). With :model set, self-play is
-   guided by that ONNX network; otherwise it uses random rollouts (generation 0)."
-  [{:keys [games out threads model] :or {threads n-cores out "data/selfplay.bin"} :as opts}]
-  (let [opts (assoc opts :evaluate (evaluator-for model))
-        _ (println (format "Self-play with %s" (if model (str "model " model) "random rollouts")))
+   guided by that ONNX network; otherwise it uses playout MCTS (generation 0),
+   with :rollout selecting the playout policy (:random or :heuristic)."
+  [{:keys [games out threads model utility-c rollout]
+    :or {threads n-cores out "data/selfplay.bin" rollout "random"} :as opts}]
+  (let [rollout-kw (keyword rollout)
+        opts (assoc opts :evaluate (evaluator-for model {:utility-c utility-c :rollout rollout-kw}))
+        _ (println (format "Self-play with %s%s"
+                           (if model (str "model " model)
+                               (str (name rollout-kw) " rollouts"))
+                           (if (and model utility-c) (format " (utility-c=%.2f)" (double utility-c)) "")))
         t0 (System/currentTimeMillis)
         done (atom 0)
         results (par-map threads
@@ -225,12 +275,15 @@
    challenger's win rate (a challenger no stronger than the champion wins the
    1/players baseline). champion nil/'rollout' pits the challenger vs rollouts.
    Prints a machine-readable RESULT line for the training loop."
-  [{:keys [challenger champion games players simulations threads]
-    :or {games 30 players 3 simulations 100 threads n-cores}}]
-  (println (format "Versus: challenger=%s  champion=%s  (%d games, %d sims, %d threads)"
-                   challenger (or champion "rollout") games simulations threads))
-  (let [chal-ev (evaluator-for challenger)
-        champ-ev (evaluator-for champion)
+  [{:keys [challenger champion games players simulations threads utility-c rollout]
+    :or {games 30 players 3 simulations 100 threads n-cores rollout "random"}}]
+  (println (format "Versus: challenger=%s  champion=%s  (%d games, %d sims, %d threads%s)"
+                   challenger (or champion (str (name (keyword rollout)) "-rollout"))
+                   games simulations threads
+                   (if utility-c (format ", utility-c=%.2f" (double utility-c)) "")))
+  (let [ev-opts {:utility-c utility-c :rollout (keyword rollout)}
+        chal-ev (evaluator-for challenger ev-opts)
+        champ-ev (evaluator-for champion ev-opts)
         outcomes (par-map threads
                           (fn [i]
                             (let [chal-seat (mod i players)
@@ -282,9 +335,13 @@
 (defn arena
   "Play games in parallel with the MCTS seat rotating; report the win rate.
    With 3 players, a bot no better than its opponents wins ~33%."
-  [{:keys [games players threads] :or {games 20 players 3 threads n-cores} :as opts}]
-  (println (format "Running %d arena games on %d threads..." games threads))
-  (let [outcomes (par-map threads
+  [{:keys [games players threads model utility-c rollout]
+    :or {games 20 players 3 threads n-cores rollout "random"} :as opts}]
+  (println (format "Running %d arena games on %d threads (MCTS=%s)..."
+                   games threads (if model (str "model " model) (str (name (keyword rollout)) " rollouts"))))
+  (let [opts (assoc opts :evaluate
+                    (evaluator-for model {:utility-c utility-c :rollout (keyword rollout)}))
+        outcomes (par-map threads
                           (fn [i]
                             (let [seat (mod i players)
                                   win? (play-arena-game (assoc opts :mcts-seat seat))]
@@ -301,10 +358,14 @@
 ;; CLI
 ;; --------------------------------------------------------------------------
 
+(defn- parse-arg-val [v]
+  (cond
+    (re-matches #"-?\d+" v) (parse-long v)
+    (re-matches #"-?\d+\.\d+" v) (parse-double v)   ;; e.g. --utility-c 0.5
+    :else v))
+
 (defn- parse-args [args]
-  (into {} (map (fn [[k v]]
-                  [(keyword (subs k 2))
-                   (if (re-matches #"-?\d+" v) (parse-long v) v)])
+  (into {} (map (fn [[k v]] [(keyword (subs k 2)) (parse-arg-val v)])
                 (partition 2 args))))
 
 (defn -main [& [cmd & args]]
@@ -313,8 +374,9 @@
       "generate" (generate! (merge {:games 10 :simulations 200 :out "data/selfplay.bin"} opts))
       "arena"    (arena (merge {:games 20 :simulations 100} opts))
       "versus"   (versus (merge {:games 100 :simulations 400} opts))
-      (println (str "usage:\n"
-                    "  clj -M:selfplay generate --games N --sims N [--model M.onnx] [--threads N] --out FILE\n"
-                    "  clj -M:selfplay arena    --games N --sims N [--threads N]        (MCTS vs heuristic)\n"
-                    "  clj -M:selfplay versus   --challenger A.onnx [--champion B.onnx] --games N --sims N"))))
+      (println (str "usage (--utility-c C weights the score-margin head in NN search;\n"
+                    "       --rollout heuristic|random picks the gen-0 playout policy):\n"
+                    "  clj -M:selfplay generate --games N --sims N [--model M.onnx] [--utility-c C] [--rollout K] [--threads N] --out FILE\n"
+                    "  clj -M:selfplay arena    --games N --sims N [--model M.onnx] [--utility-c C] [--rollout K] [--threads N]   (MCTS vs heuristic)\n"
+                    "  clj -M:selfplay versus   --challenger A.onnx [--champion B.onnx] [--utility-c C] [--rollout K] --games N --sims N"))))
   (shutdown-agents))

@@ -69,8 +69,9 @@
                              " inputs but this " n-players "-player state encodes to "
                              (count state-vec) ". A model only works for the player "
                              "count it was trained on (and the encoder version). "
-                             "Use a matching " (cond (= input-dim 328) "3" (= input-dim 398) "4"
-                                                     (= input-dim 468) "5" :else "N")
+                             "Use a matching " (cond (= input-dim 249) "2" (= input-dim 327) "3"
+                                                     (= input-dim 397) "4" (= input-dim 467) "5"
+                                                     :else "N")
                              "-player game, or retrain for this player count.")
                         {:input-dim input-dim :got (count state-vec) :players n-players})))
       (let [input ^"[[F" (into-array [(float-array state-vec)])]

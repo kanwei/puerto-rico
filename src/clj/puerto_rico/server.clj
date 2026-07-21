@@ -98,14 +98,17 @@
   "Stateless AI endpoint used by the browser game: the client posts the full
    game state as EDN, the server answers with an MCTS-chosen move for the
    player who must act.
-   Body: {:game-state <state> :simulations <n> :model <\"x.onnx\"|nil>}
-   model nil/absent uses plain rollout MCTS; a name loads that ONNX net
-   (the score-margin utility blend is applied automatically)."
+   Body: {:game-state <state> :simulations <n> :model <\"x.onnx\"|nil> :utility-c <c>}
+   model nil/absent uses plain rollout MCTS; a name loads that ONNX net.
+   utility-c weights the score-margin head in the value blend (U = win + c*margin);
+   it defaults to match the self-play/eval regime so play uses the same search the
+   policy was trained under (the margin head is the reliable long-horizon signal)."
   [request]
   (try
-    (let [{:keys [game-state simulations model]} (edn/read-string (slurp (:body request)))
+    (let [{:keys [game-state simulations model utility-c]} (edn/read-string (slurp (:body request)))
           player-id (:id (actions/actor-player game-state))
-          evaluate (selfplay/evaluator-for (when model (str models-dir "/" model)))
+          evaluate (selfplay/evaluator-for (when model (str models-dir "/" model))
+                                           {:utility-c (when model (or utility-c 0.5))})
           decision (mcts/ai-decide game-state player-id
                                    {:simulations (or simulations 200)
                                     :evaluate evaluate})]

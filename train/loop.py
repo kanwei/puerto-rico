@@ -59,7 +59,7 @@ def run_capture(cmd):
     return p.stdout, p.returncode
 
 
-def self_play(gen, champion, games, sims, players):
+def self_play(gen, champion, games, sims, players, utility_c, rollout):
     # Clojure appends a `-<S>-<A>.bin` shape suffix, so pass a base name and
     # glob for the actual file it wrote.
     base = os.path.join(DATA, f"p{players}-gen{gen}")
@@ -71,7 +71,13 @@ def self_play(gen, champion, games, sims, players):
            "--games", str(games), "--sims", str(sims),
            "--players", str(players), "--out", base + ".bin"]
     if champion:
-        cmd += ["--model", champion]
+        # utility-c only affects NN search, so pass it only when a model drives
+        # self-play (the rollout generation ignores it)
+        cmd += ["--model", champion, "--utility-c", str(utility_c)]
+    else:
+        # gen-0 bootstrap: heuristic playouts give the value head a real signal
+        # (random playouts can't tell that taking plantations / building helps)
+        cmd += ["--rollout", rollout]
     run(cmd)
     files = glob.glob(base + "-*.bin")
     if not files:
@@ -99,14 +105,18 @@ def training_window(gen, window, players):
     return win
 
 
-def train(gen, resume, epochs, batch, width, blocks, device, players):
+def train(gen, resume, epochs, batch, width, blocks, device, players, arch,
+          d_model, layers, heads):
     data = training_window(gen, 5, players)
     out = os.path.join(MODELS, f"p{players}-gen{gen}")
     # use the same interpreter running this loop (i.e. the venv python)
     cmd = [sys.executable, os.path.join(ROOT, "train", "train.py"),
            "--data", data, "--out", out,
            "--epochs", str(epochs), "--batch", str(batch),
+           "--arch", arch,
            "--width", str(width), "--blocks", str(blocks),
+           "--d-model", str(d_model), "--layers", str(layers),
+           "--heads", str(heads),
            "--device", device]
     if resume:
         cmd += ["--resume", resume]
@@ -114,11 +124,12 @@ def train(gen, resume, epochs, batch, width, blocks, device, players):
     return out + ".onnx", out + ".pt"
 
 
-def evaluate(challenger, champion, games, sims, players):
+def evaluate(challenger, champion, games, sims, players, utility_c):
     cmd = ["clj", "-M:selfplay", "versus",
            "--challenger", challenger,
            "--games", str(games), "--sims", str(sims),
-           "--players", str(players)]
+           "--players", str(players),
+           "--utility-c", str(utility_c)]
     if champion:
         cmd += ["--champion", champion]
     out, code = run_capture(cmd)
@@ -142,8 +153,20 @@ def main():
     ap.add_argument("--epochs", type=int, default=3,
                     help="keep low (2-5); more games beats more epochs")
     ap.add_argument("--batch", type=int, default=256)
-    ap.add_argument("--width", type=int, default=384)
-    ap.add_argument("--blocks", type=int, default=5)
+    ap.add_argument("--arch", default="mlp", choices=["mlp", "transformer"],
+                    help="network architecture for every generation")
+    ap.add_argument("--width", type=int, default=384, help="mlp hidden width")
+    ap.add_argument("--blocks", type=int, default=5, help="mlp residual blocks")
+    ap.add_argument("--d-model", type=int, default=128, help="transformer dim")
+    ap.add_argument("--layers", type=int, default=3, help="transformer layers")
+    ap.add_argument("--heads", type=int, default=4, help="transformer heads")
+    ap.add_argument("--utility-c", type=float, default=0.5,
+                    help="MCTS score-margin weight for NN search (U = win + c*margin). "
+                         "Higher lets the reliable score-margin head drive search instead "
+                         "of the noisier win/loss head; 0.05 is the old default.")
+    ap.add_argument("--rollout", default="heuristic", choices=["heuristic", "random"],
+                    help="gen-0 playout policy. heuristic (default) gives the value "
+                         "head a real long-horizon signal; random is the old behavior.")
     ap.add_argument("--promote", type=float, default=None,
                     help="win-rate gate to become champion (default: baseline + 0.07)")
     ap.add_argument("--start-gen", type=int, default=1)
@@ -170,12 +193,14 @@ def main():
         t0 = time.time()
         print(f"\n{'=' * 70}\nGENERATION {gen}  (champion: {champion or 'rollouts'})\n{'=' * 70}")
 
-        self_play(gen, champion, args.games, args.sims, args.players)
+        self_play(gen, champion, args.games, args.sims, args.players,
+                  args.utility_c, args.rollout)
         cand_onnx, cand_pt = train(gen, champion_pt, args.epochs,
                                    args.batch, args.width, args.blocks, args.device,
-                                   args.players)
+                                   args.players, args.arch, args.d_model,
+                                   args.layers, args.heads)
         result = evaluate(cand_onnx, champion, args.eval_games,
-                          args.eval_sims, args.players)
+                          args.eval_sims, args.players, args.utility_c)
         winrate = result["winrate"]
 
         promoted = (champion is None) or (winrate >= gate)
