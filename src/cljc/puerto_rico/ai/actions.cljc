@@ -225,3 +225,144 @@
   "Apply an action id to the game state, returning the next state"
   [game-state id]
   (rules/apply-move game-state (action->move game-state id)))
+
+;; --------------------------------------------------------------------------
+;; Heuristic action scoring for prior blending
+;; --------------------------------------------------------------------------
+
+(defn- production-good
+  "The good a production building outputs, or nil for non-production buildings."
+  [building-key]
+  (get-in state/buildings [building-key :good]))
+
+(defn heuristic-action-scores
+  "Return a {action-id score} map for the current actor, scoring how
+   desirable each legal action is from a domain-knowledge perspective.
+
+   Mayor priority tiers (pair-aware):
+     1. Production building WITH matching plantations    → 0.85
+     2. Plantation WITH matching production building      → 0.75
+     3. Corn plantation (feeding value)                   → 0.55
+     4. Non-production buildings (utility)                → 0.45
+     5. Unmatched plantation (useless)                    → 0.25
+     6. Unmatched production building (useless)           → 0.25
+
+   A production building scores low when no plantations of that good exist,
+   and vice versa — unpaired placements are dead weight.
+
+   Scores are in [0.1, 0.9].  An endgame-saturation decay pushes all scores
+   toward 0.5 (neutral) when most table buildings are already placed.
+
+   Returns nil when no heuristic applies (role selection, pass-only, etc.)."
+  [game-state]
+  (let [player (actor-player game-state)
+        phase (:phase game-state)]
+    (when (= phase :role-execution)
+      (case (:selected-role game-state)
+        :mayor
+        (let [;; Goods for which the player has production buildings
+              prod-building-goods (set (keep production-good
+                                             (map :type (:buildings player))))
+              ;; Goods for which the player has plantations
+              plantation-goods (set (map :type (:plantations player)))
+              ;; Saturation: 0.0 = early game, 1.0 = all 12-slots per player full
+              all-buildings (mapcat :buildings (:players game-state))
+              total-slots (* (count (:players game-state)) 12)
+              saturation (min 1.0 (/ (count all-buildings) total-slots))
+              ;; Decay: early game = 1.0 (full heuristic), saturated = 0.3
+              decay (+ 0.3 (* 0.7 (max 0 (- 1.0 saturation))))
+              legal (legal-action-ids game-state)]
+          (when-not (= legal [pass-id])
+            (into {}
+                  (map (fn [id]
+                         (let [{:keys [kind building plantation]} (nth action-table id)
+                               raw (case kind
+                                     :place-building
+                                     (let [good (production-good building)]
+                                       (if good
+                                         ;; Production building: only scores high
+                                         ;; if matching plantations exist
+                                         (if (contains? plantation-goods good)
+                                           (* decay 0.85)
+                                           (* decay 0.25))
+                                         ;; Non-production building → utility
+                                         (* decay 0.45)))
+                                     :place-plantation
+                                     (if (contains? prod-building-goods plantation)
+                                       ;; Paired plantation → feeds production
+                                       (* decay 0.75)
+                                       (if (= plantation :corn)
+                                         ;; Corn → feeding value
+                                         (* decay 0.55)
+                                         ;; Unmatched plantation → useless
+                                         (* decay 0.25))))]
+                           [id (max 0.1 (min 0.9 raw))])))
+                  legal)))
+
+        ;; Settler: prefer taking plantations that match owned production
+        ;; buildings.  Score is based on the shortfall between production
+        ;; capacity (sum of :worker slots) and owned plantation count per
+        ;; good type.
+        :settler
+        (let [;; Total production-worker slots per good type
+              production-slots (reduce (fn [m b]
+                                         (if-let [good (production-good (:type b))]
+                                           (update m good (fnil + 0)
+                                                   (get-in state/buildings [(:type b) :worker] 1))
+                                           m))
+                                       {}
+                                       (:buildings player))
+              ;; Plantation count per type
+              plantation-count (reduce (fn [m p]
+                                         (update m (:type p) (fnil + 0) 1))
+                                       {}
+                                       (:plantations player))
+              ;; Shortfall per good: max(0, capacity - count)
+              shortfall (fn [good]
+                          (let [cap (get production-slots good 0)
+                                cnt (get plantation-count good 0)]
+                            (max 0 (- cap cnt))))
+              legal (legal-action-ids game-state)]
+          (when-not (= legal [pass-id])
+            (into {}
+                  (map (fn [id]
+                         (let [{:keys [kind plantation]} (nth action-table id)]
+                           [id (case kind
+                                 :settler-take
+                                 (let [good (or plantation :quarry)
+                                       cap (get production-slots good 0)
+                                       sf (shortfall good)]
+                                   (if (pos? cap)
+                                     ;; Matching production exists: score by shortfall
+                                     ;; using sigmoid curve so large absolute
+                                     ;; shortfalls score higher than small ones
+                                     (if (pos? sf)
+                                       (+ 0.5 (* 0.35 (/ (double sf)
+                                                         (+ 1.0 (double sf)))))
+                                       0.3)
+                                     ;; No matching production: low score
+                                     0.2))
+                                 :settler-hacienda
+                                 0.5
+                                 ;; pass
+                                 0.5)])))
+                  legal)))
+
+        ;; Builder: prefer production buildings that match owned plantations.
+        :builder
+        (let [owned-plantation-types (set (map :type (:plantations player)))
+              legal (legal-action-ids game-state)]
+          (when-not (= legal [pass-id])
+            (into {}
+                  (map (fn [id]
+                         (let [{:keys [kind building]} (nth action-table id)]
+                           (if (= kind :build)
+                             (let [good (production-good building)]
+                               [id (if (and good (contains? owned-plantation-types good))
+                                     0.8
+                                     0.2)])
+                             [id 0.5])))) ;; pass or non-build
+                  legal)))
+
+        ;; Other roles: no heuristic priors yet.
+        nil))))

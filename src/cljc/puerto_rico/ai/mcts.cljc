@@ -144,6 +144,46 @@
      :value (outcome-utility (random-playout game-state max-steps))}))
 
 ;; --------------------------------------------------------------------------
+;; Heuristic prior blending
+;; --------------------------------------------------------------------------
+
+(defn blend-heuristic-priors
+  "Wrap an evaluator to blend heuristic action scores into the priors it
+   returns.  `heuristic-lambda` controls heuristic strength: 0.0 = pure
+   evaluator, 1.0 = pure heuristic.
+
+   Recommended: 0.15-0.35 for rollout MCTS (no network knowledge),
+   0.05-0.15 when a trained network already encodes some matching logic.
+
+   Blending happens in probability space:
+     P_combined = (1 - lambda) * P_eval + lambda * P_heuristic
+
+   This nudges MCTS to explore heuristic-good moves earlier while the
+   evaluator still determines the overall shape.  As visits accumulate,
+   Q-values dominate and the heuristic influence fades — the 'nudge but
+   allow exploration' behavior."
+  [evaluate {:keys [heuristic-lambda] :or {heuristic-lambda 0.2}}]
+  (fn [game-state legal-ids]
+    (let [result (evaluate game-state legal-ids)
+          heuristic (actions/heuristic-action-scores game-state)]
+      (if (nil? heuristic)
+        result
+        (let [eval-priors (:priors result)
+              ;; Normalize heuristic scores to a proper distribution
+              h-sum (reduce + 0 (vals heuristic))
+              h-prior (when (pos? h-sum)
+                        (into {} (map (fn [[id s]] [id (/ s h-sum)]) heuristic))
+                        {})
+              uniform (/ 1.0 (count legal-ids))]
+          (assoc result :priors
+                 (into {} (map (fn [id]
+                                 [id (+ (* (- 1.0 heuristic-lambda)
+                                           (get eval-priors id uniform))
+                                        (* heuristic-lambda
+                                           (get h-prior id uniform)))])
+                               legal-ids))))))))
+
+;; --------------------------------------------------------------------------
 ;; PUCT search
 ;; --------------------------------------------------------------------------
 ;; Node: {:P {id prior} :N {id visits} :W {id value-sum-vector} :children {id node}}
@@ -209,7 +249,7 @@
    :c-puct 1.5
    :dirichlet-alpha 1.0
    :dirichlet-frac 0.0    ;; set to ~0.25 during self-play
-   :evaluate nil})        ;; nil -> rollout-evaluator
+   :evaluate nil})        ;; nil -> heuristic-blended rollout-evaluator
 
 (defn mcts-search
   "Run MCTS from game-state for the player who must act now.
@@ -217,7 +257,7 @@
   [game-state opts]
   (let [{:keys [simulations c-puct dirichlet-alpha dirichlet-frac evaluate]}
         (merge default-opts opts)
-        evaluate (or evaluate (rollout-evaluator))
+        evaluate (or evaluate (blend-heuristic-priors (rollout-evaluator) {}))
         opts* {:evaluate evaluate :c-puct c-puct}
         legal-ids (actions/legal-action-ids game-state)
         determinize #(update % :plantation-supply dshuffle)

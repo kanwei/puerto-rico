@@ -162,3 +162,272 @@
         (let [actor-id (:id (actions/actor-player gs))
               move (mcts/ai-select-move gs actor-id {:simulations 8})]
           (recur (rules/apply-move gs move) (inc steps)))))))
+
+;; --------------------------------------------------------------------------
+;; Heuristic action scoring (settlement/production matching)
+;; --------------------------------------------------------------------------
+
+(defn- mk-mayor-gs
+  "Build a game state in mayor execution for P0 with the given plantations and
+   buildings. `colonists-in-hand` defaults to 2."
+  [plantations buildings & {:keys [colonists-in-hand] :or {colonists-in-hand 2}}]
+  (-> (mk-game)
+      (assoc :phase :role-execution
+             :selected-role :mayor
+             :role-execution-current-idx 0
+             :role-execution-order [0 1 2])
+      (assoc-in [:players 0 :plantations] plantations)
+      (assoc-in [:players 0 :buildings] buildings)
+      (assoc-in [:players 0 :colonists-in-hand] colonists-in-hand)))
+
+(defn- plant-score
+  "Heuristic score for placing a colonist on a plantation of `type`."
+  [scores type]
+  (get scores (actions/action-id {:kind :place-plantation :plantation type})))
+
+(defn- bldg-score
+  "Heuristic score for placing a colonist on a building of `type`."
+  [scores type]
+  (get scores (actions/action-id {:kind :place-building :building type})))
+
+(deftest heuristic-mayor-prefers-paired-production
+  "A production building with matching plantations scores highest."
+  (testing "paired sugar maker scores highest"
+    (let [gs (mk-mayor-gs [{:type :sugar :colonists 0}]
+                          [{:type :small-sugar-maker :colonists 0}])
+          scores (actions/heuristic-action-scores gs)]
+      (is scores "heuristic should apply for mayor with placements")
+      (is (> (bldg-score scores :small-sugar-maker)
+             (plant-score scores :sugar))
+          "paired production building should score higher than paired plantation"))))
+
+(deftest heuristic-mayor-unpaired-production-scores-low
+  "A production building WITHOUT matching plantations scores low (0.25),
+   the same as unmatched plantations."
+  (testing "sugar maker with no sugar plantations scores low"
+    (let [gs (mk-mayor-gs [{:type :indigo :colonists 0}]
+                          [{:type :small-sugar-maker :colonists 0}
+                           {:type :small-indigo-maker :colonists 0}]
+                          :colonists-in-hand 1)
+          scores (actions/heuristic-action-scores gs)]
+      (is (< (bldg-score scores :small-sugar-maker)
+             (plant-score scores :indigo))
+          "unmatched production building should score below paired plantation")
+      (is (<= (bldg-score scores :small-sugar-maker) 0.3)
+          "unmatched production building should score near bottom"))))
+
+(deftest heuristic-mayor-prefers-paired-plantations
+  "A plantation matching an owned production building should score higher
+   than an unmatched plantation."
+  (testing "paired sugar plantation scores higher than unmatched indigo"
+    (let [gs (mk-mayor-gs [{:type :sugar :colonists 0}
+                           {:type :indigo :colonists 0}]
+                          [{:type :small-sugar-maker :colonists 0}])
+          scores (actions/heuristic-action-scores gs)]
+      (is (> (plant-score scores :sugar)
+             (plant-score scores :indigo))
+          "paired plantation should score higher than unmatched plantation"))))
+
+(deftest heuristic-mayor-corn-over-unmatched
+  "Corn plantations should score higher than unmatched plantations and
+   slightly higher than non-production buildings."
+  (testing "corn scores higher than unmatched indigo"
+    (let [gs (mk-mayor-gs [{:type :corn :colonists 0}
+                           {:type :indigo :colonists 0}]
+                          [])
+          scores (actions/heuristic-action-scores gs)]
+      (is (> (plant-score scores :corn)
+             (plant-score scores :indigo))
+          "corn should score higher than unmatched plantation")))
+
+  (testing "corn scores slightly above non-production buildings"
+    (let [gs (mk-mayor-gs [{:type :corn :colonists 0}]
+                          [{:type :small-market :colonists 0}])
+          scores (actions/heuristic-action-scores gs)]
+      (is (> (plant-score scores :corn)
+             (bldg-score scores :small-market))
+          "corn should score slightly above utility buildings"))))
+
+(deftest heuristic-mayor-full-priority-chain
+  "Test the complete priority chain: paired-bldg > paired-plantation >
+   corn > non-production > unmatched-everything."
+  (testing "all tiers present in one state"
+    (let [gs (mk-mayor-gs [{:type :sugar :colonists 0}
+                           {:type :corn :colonists 0}
+                           {:type :indigo :colonists 0}]
+                          [{:type :small-sugar-maker :colonists 0}
+                           {:type :small-market :colonists 0}])
+          scores (actions/heuristic-action-scores gs)]
+      (is (> (bldg-score scores :small-sugar-maker)
+             (plant-score scores :sugar))
+          "paired production building > paired plantation")
+      (is (> (plant-score scores :sugar)
+             (plant-score scores :corn))
+          "paired plantation > corn plantation")
+      (is (> (plant-score scores :corn)
+             (bldg-score scores :small-market))
+          "corn > non-production building")
+      (is (> (bldg-score scores :small-market)
+             (plant-score scores :indigo))
+          "non-production building > unmatched plantation"))))
+
+(deftest heuristic-mayor-symmetric-situation
+  "When both good types have identical unfilled plantations and buildings,
+   the heuristic should score them equally."
+  (testing "2 empty sugar, 2 empty indigo; 1 unfilled sugar bldg, 1 unfilled indigo bldg"
+    (let [gs (mk-mayor-gs [{:type :sugar :colonists 0}
+                           {:type :sugar :colonists 0}
+                           {:type :indigo :colonists 0}
+                           {:type :indigo :colonists 0}]
+                          [{:type :small-sugar-maker :colonists 0}
+                           {:type :small-indigo-maker :colonists 0}])
+          scores (actions/heuristic-action-scores gs)
+          sugar-plant-score (plant-score scores :sugar)
+          indigo-plant-score (plant-score scores :indigo)
+          sugar-bldg-score (bldg-score scores :small-sugar-maker)
+          indigo-bldg-score (bldg-score scores :small-indigo-maker)]
+      (is (some? sugar-plant-score) "sugar plantation score should exist")
+      (is (some? indigo-plant-score) "indigo plantation score should exist")
+      (is (= sugar-plant-score indigo-plant-score)
+          "symmetric situations should produce equal plantation scores")
+      (is (= sugar-bldg-score indigo-bldg-score)
+          "symmetric situations should produce equal building scores"))))
+
+(deftest heuristic-decays-in-endgame
+  "When most table buildings are placed, the heuristic should push scores toward
+   0.5 (neutral), reducing its influence."
+  (testing "many filled buildings across table => scores near neutral"
+    (let [gs (mk-mayor-gs [{:type :sugar :colonists 0}
+                           {:type :corn :colonists 1}]
+                          [{:type :small-sugar-maker :colonists 0}
+                           {:type :small-indigo-maker :colonists 1}
+                           {:type :large-sugar-maker :colonists 3}
+                           {:type :tobacco-maker :colonists 1}
+                           {:type :coffee-maker :colonists 1}
+                           {:type :small-market :colonists 1}
+                           {:type :hacienda :colonists 1}
+                           {:type :construction-hut :colonists 1}]
+                          :colonists-in-hand 1)
+          gs (-> gs
+                 (assoc-in [:players 1 :buildings]
+                           [{:type :large-indigo-maker :colonists 3}
+                            {:type :small-warehouse :colonists 1}
+                            {:type :hospice :colonists 1}
+                            {:type :office :colonists 1}
+                            {:type :factory :colonists 1}
+                            {:type :large-market :colonists 1}])
+                 (assoc-in [:players 2 :buildings]
+                           [{:type :large-warehouse :colonists 1}
+                            {:type :university :colonists 1}
+                            {:type :harbor :colonists 1}
+                            {:type :wharf :colonists 1}
+                            {:type :guild-hall :colonists 1}
+                            {:type :residence :colonists 1}]))
+          scores (actions/heuristic-action-scores gs)
+          sugar-score (plant-score scores :sugar)]
+      (is (some? sugar-score) "score should exist")
+      (is (<= (Math/abs (- sugar-score 0.5)) 0.15)
+          "in saturated endgame, scores should be near neutral (0.5)"))))
+
+;; --------------------------------------------------------------------------
+;; Heuristic action scoring (settler plantation-taking)
+;; --------------------------------------------------------------------------
+
+(defn- mk-settler-gs
+  "Build a game state in settler execution for P0 with the given plantations,
+   buildings, and face-up plantations."
+  [plantations buildings face-up]
+  (-> (mk-game)
+      (assoc :phase :role-execution
+             :selected-role :settler
+             :role-execution-current-idx 0
+             :role-execution-order [0 1 2])
+      (assoc-in [:players 0 :plantations] plantations)
+      (assoc-in [:players 0 :buildings] buildings)
+      (assoc :face-up-plantations face-up)))
+
+(defn- take-score
+  "Heuristic score for taking a plantation of `type`."
+  [scores type]
+  (get scores (actions/action-id {:kind :settler-take :plantation type})))
+
+(deftest heuristic-settler-favors-plantation-for-owned-production
+  "When the player owns a large-indigo-maker (3 slots) and has no indigo
+   plantations, taking an indigo plantation should score highest."
+  (testing "large-indigo-maker + 0 indigo plantations, indigo face-up"
+    (let [gs (mk-settler-gs []
+                            [{:type :large-indigo-maker :colonists 0}]
+                            [:indigo :sugar :corn])
+          scores (actions/heuristic-action-scores gs)]
+      (is scores "heuristic should apply for settler with takes")
+      (is (> (take-score scores :indigo)
+             (take-score scores :sugar))
+          "indigo plantation should score higher than sugar
+             when player owns indigo production")
+      (is (> (take-score scores :indigo)
+             (take-score scores :corn))
+          "indigo plantation should score higher than corn
+             when player owns indigo production"))))
+
+(deftest heuristic-settler-prefers-largest-gap
+  "When the player owns both a large-indigo-maker (3 slots, 0 plantations)
+   and a small-sugar-maker (1 slot, 0 plantations), indigo should score
+   higher because the shortfall is larger."
+  (testing "large-indigo-maker + small-sugar-maker, both face-up"
+    (let [gs (mk-settler-gs []
+                            [{:type :large-indigo-maker :colonists 0}
+                             {:type :small-sugar-maker :colonists 0}]
+                            [:indigo :sugar :tobacco])
+          scores (actions/heuristic-action-scores gs)]
+      (is (> (take-score scores :indigo)
+             (take-score scores :sugar))
+          "indigo should score higher than sugar
+             when shortfall is 3 vs 1"))))
+
+(deftest heuristic-settler-reduces-score-when-plantations-match
+  "When the player already has plantations matching production capacity,
+   taking another plantation of that type should score lower than one with
+   an unmatched good type (which scores 0.2)."
+  (testing "large-sugar-maker + 3 sugar plantations, sugar face-up"
+    ;; 3 sugar plantations vs 3 sugar production slots => shortfall is 0
+    ;; sugar scores 0.3 (matched, no shortfall), corn scores 0.2 (no match)
+    (let [gs (mk-settler-gs [{:type :sugar :colonists 0}
+                             {:type :sugar :colonists 0}
+                             {:type :sugar :colonists 0}]
+                            [{:type :large-sugar-maker :colonists 0}]
+                            [:sugar :corn])
+          scores (actions/heuristic-action-scores gs)]
+      (is (< (take-score scores :sugar)
+             0.35)
+          "sugar should score near neutral when shortfall is 0")
+      (is (> (take-score scores :sugar)
+             (take-score scores :corn))
+          "sugar (matched, no shortfall) should still beat corn (no production)"))))
+
+(deftest heuristic-settler-ignores-plantations-without-production
+  "When tobacco is face-up but the player has no tobacco production,
+   taking tobacco should score lower than taking a matching good."
+  (testing "large-indigo-maker face-up, tobacco face-up but no tobacco production"
+    (let [gs (mk-settler-gs []
+                            [{:type :large-indigo-maker :colonists 0}]
+                            [:indigo :tobacco])
+          scores (actions/heuristic-action-scores gs)]
+      (is (> (take-score scores :indigo)
+             (take-score scores :tobacco))
+          "indigo should score higher than tobacco
+             when only indigo production exists"))))
+
+(deftest heuristic-settler-partial-fill-increases-need
+  "When the player owns a large-sugar-maker but only 1 sugar plantation,
+   the shortfall (3 - 1 = 2) should make taking sugar score high."
+  (testing "large-sugar-maker + 1 sugar plantation, sugar face-up"
+    (let [gs (mk-settler-gs [{:type :sugar :colonists 0}]
+                            [{:type :large-sugar-maker :colonists 0}]
+                            [:sugar :corn])
+          scores (actions/heuristic-action-scores gs)]
+      (is (> (take-score scores :sugar)
+             (take-score scores :corn))
+          "sugar should score higher than corn
+             when sugar shortfall is 2")
+      (is (>= (take-score scores :sugar) 0.6)
+          "sugar plantation score should be high"))))

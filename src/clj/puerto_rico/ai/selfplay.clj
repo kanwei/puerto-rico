@@ -52,7 +52,7 @@
   "MCTS evaluator for a model spec (nil/'rollout' -> random rollouts)"
   [spec]
   (if (or (nil? spec) (= spec "rollout"))
-    (mcts/rollout-evaluator)
+    (mcts/blend-heuristic-priors (mcts/rollout-evaluator) {})
     (nn/evaluator (or (get @model-cache spec)
                       (get (swap! model-cache assoc spec (nn/load-model spec)) spec)))))
 
