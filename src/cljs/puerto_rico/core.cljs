@@ -80,10 +80,10 @@
         ;; Calculate turn number within round (1-based) from the acting state
         turn-num (if current-player-idx (inc current-player-idx) 1)
         turn-label (str round-num "." turn-num)
-        entry {:turn                turn-label
-               :message             message
-               :player              player-name
-               :stats               stats                    ; AI search diagnostics (nil for humans)
+        entry {:turn turn-label
+               :message message
+               :player player-name
+               :stats stats                    ; AI search diagnostics (nil for humans)
                ;; Snapshot = the state AFTER this action, so reviewing an entry
                ;; shows its result. Callers that log before applying the move
                ;; (the common case) leave this ::pending; the game-state watch
@@ -91,7 +91,7 @@
                ;; Callers that log after the state is already applied (new game,
                ;; auto-fills) pass the snapshot explicitly.
                :game-state-snapshot (or snapshot ::pending)
-               :timestamp           (.getTime (js/Date.))}]
+               :timestamp (.getTime (js/Date.))}]
     (swap! game-log conj entry)))
 ;; No limit - keep all entries to see start of game
 
@@ -112,9 +112,9 @@
       (let [cur (if (:active @historical-view) (:state-index @historical-view) n)
             nxt (+ cur dir)]
         (cond
-          (< nxt 0)  (view-historical-state 0)
+          (< nxt 0) (view-historical-state 0)
           (>= nxt n) (return-to-current-state)
-          :else      (view-historical-state nxt))))))
+          :else (view-historical-state nxt))))))
 
 ;; Left/Right arrows step through logged states (defonce so hot reload doesn't
 ;; stack duplicate listeners). Ignored while typing in a form control.
@@ -124,7 +124,7 @@
        (fn [e]
          (when-not (#{"INPUT" "SELECT" "TEXTAREA"} (some-> (.-target e) .-tagName))
            (case (.-key e)
-             "ArrowLeft"  (do (.preventDefault e) (step-history -1))
+             "ArrowLeft" (do (.preventDefault e) (step-history -1))
              "ArrowRight" (do (.preventDefault e) (step-history 1))
              nil))))
       true))
@@ -688,7 +688,7 @@
 
 ;; Components
 (defn role-card [role available? gold-amount on-select]
-  [:div.role-card {:class    (when-not available? "disabled")
+  [:div.role-card {:class (when-not available? "disabled")
                    :on-click (when available? #(on-select role))}
    [:div.role-card-head
     [:span.role-card-title (titlecase (role-display-name role))]
@@ -748,11 +748,17 @@
 
         [:p "Select a plantation tile to place on your island:"]
         [:div.choice-grid
-         ;; Face-up plantation choices
-         (for [[idx plantation-type] (map-indexed vector face-up-plantations)]
-           ^{:key (str "face-up-" idx)}
+         ;; Face-up plantation choices — grouped by type, sorted by good value
+         (for [[plantation-type count]
+               (sort-by (comp #(get rules/good-values % 99) first)
+                        (frequencies face-up-plantations))]
+           ^{:key (str "face-up-" plantation-type)}
            [:div.choice-card {:on-click #(handle-plantation-choice plantation-type)}
-            [:h3 (name plantation-type)]])
+            [:h3
+             [:span.dot {:style {:background-color (get good-color plantation-type "#8f8b84"),
+                                 :margin-right "8px"}}]
+             (titlecase plantation-type)]
+            [:p (str "Available: " count)]])
 
          ;; Quarry choice (settler privilege, or occupied construction hut)
          (when can-take-quarry
@@ -796,10 +802,10 @@
      [:div.building-card-foot
       (cond
         owned? [:span.building-tag "Built"]
-        (not buildable?) [:span.building-tag.locked-tag "Can't build"]
+        (not buildable?) [:span.building-tag.locked-tag "Can't Afford"]
         (pos? discount) [:span.building-tag.discount-tag (str "was $" base-cost)]
         :else [:span])
-      [:span.building-supply (str supply " left")]]]))
+      [:span.building-supply (str "Available: " supply)]]]))
 
 ;; The board groups buildings into four columns by cost tier
 (def building-columns
@@ -813,10 +819,7 @@
         any-buildable? (some #(rules/can-build-building? game-data player %)
                              (keys state/buildings))]
     [:div.role-execution
-     [:div.panel-head
-      [:h2.panel-title "Builder — choose a building"]
-      [:span.panel-sub (str "$" (:money player) " available"
-                            (when-not any-buildable? " · nothing affordable"))]]
+     [:h2.panel-title (str "Builder — choose a building ($" (:money player) " available)")]
      [:div.building-columns
       (for [col [1 2 3 4]]
         ^{:key col}
@@ -912,7 +915,7 @@
     [:div.role-execution
      [:h2 "🚢 Choose a Cargo Ship"]
      [:p "You must load on a ship that fits the most " (name good)
-         " — these ships all load the same amount:"]
+      " — these ships all load the same amount:"]
      [:div.choice-grid
       (for [[idx ship remaining] options]
         (let [loadable (min remaining player-goods)
@@ -932,15 +935,23 @@
        [:p "Choose a different good"]]]]))
 
 (defn mayor-tile
-  "One board tile in the mayor screen: a colored dot, the name, and a clickable
-   worker circle per slot. Filled circles remove a colonist to hand; empty
-   circles place one from hand (disabled when the hand is empty)."
+  "One board tile in the mayor screen: a colored dot, the name, and worker
+   circles. The entire tile is clickable — tap to add a colonist (if slots
+   remain and hand is non-empty) or remove one (if any are placed)."
   [dest-kind idx tile hand]
   (let [cap (if (= dest-kind :plantation)
               1
               (get-in state/buildings [(:type tile) :worker] 1))
-        occ (:colonists tile 0)]
-    [:div.mayor-tile
+        occ (:colonists tile 0)
+        can-add? (and (< occ cap) (pos? hand))
+        can-remove? (pos? occ)
+        on-click (when (or can-add? can-remove?)
+                   (fn []
+                     (if can-remove?
+                       (handle-mayor-remove-at dest-kind idx)
+                       (handle-mayor-place-at dest-kind idx))))]
+    [:div.mayor-tile {:on-click on-click
+                      :class (when-not (or can-add? can-remove?) "disabled")}
      (if (= dest-kind :plantation)
        [dot (:type tile)]
        [:span.dot.dot-building])
@@ -949,20 +960,19 @@
       (for [i (range cap)]
         ^{:key i}
         (if (< i occ)
-          [:button.mayor-circle.filled
-           {:title "Remove worker" :on-click #(handle-mayor-remove-at dest-kind idx)}]
-          [:button.mayor-circle.empty
-           {:title "Add worker" :disabled (zero? hand)
-            :on-click #(handle-mayor-place-at dest-kind idx)}]))]]))
+          [:div.mayor-circle.filled]
+          [:div.mayor-circle.empty]))]]))
 
 (defn mayor-placement-ui [game-data]
   (let [executor (current-role-executor game-data)
         hand (:colonists-in-hand executor)
         must-place? (and (pos? hand) (pos? (rules/empty-circle-count executor)))]
     [:div.role-execution
-     [:div.panel-head
-      [:h2.panel-title "Mayor — place colonists"]
-      [:span.panel-sub (str hand " in hand")]]
+     [:h2.panel-title
+      (cond
+        (zero? hand) "Mayor"
+        (= hand 1) "Mayor — place 1 colonist"
+        :else (str "Mayor — place " hand " colonists"))]
      [:p.muted "Click an empty circle to assign a colonist, or a filled circle to take one back."]
      [:div.mayor-board
       (when (seq (:plantations executor))
@@ -1173,7 +1183,7 @@
        (for [[idx entry] (map-indexed vector @game-log)]
          ^{:key idx}
          [:div.log-entry
-          {:class    (when (= idx (:state-index @historical-view)) "selected")
+          {:class (when (= idx (:state-index @historical-view)) "selected")
            :on-click #(view-historical-state idx)}
           [:span.turn-number (:turn entry)]
           (when (:player entry)
