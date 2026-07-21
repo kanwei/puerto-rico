@@ -49,7 +49,9 @@
         bbt (reduce (fn [m b] (assoc m (:type b) b)) {} (:buildings player))
         goods (:goods player)]
     (as-> acc a
-      (pn! a (:money player) 20)
+      ;; Money ceiling 40: players can hoard well past 20 in slow games, and
+      ;; clamping there hid the difference between a rich and a very rich player.
+      (pn! a (:money player) 40)
       (pn! a (:victory-points player) 60)
       (reduce (fn [a g] (pn! a (get goods g) 8)) a actions/good-order)
       (pn! a (:san-juan-colonists player) 10)
@@ -100,30 +102,39 @@
         wharf-used (get game-state :wharf-used #{})
         priv (get game-state :craftsman-privilege-pending #{})]
     (as-> acc a
-      (pn! a (:round game-state) 20)
-      ;; decision type one-hot (9)
+      ;; decision type one-hot (9). (The round number is deliberately NOT encoded:
+      ;; the game-ending triggers are already fed in below - VP/colonist supply,
+      ;; building slots, and the final-round flag - so the net reads the real
+      ;; clock instead of overfitting to a round counter.)
       (poh! a 9 ({:selecting 0 :settler 1 :builder 2 :trader 3
                   :captain 4 :mayor 5 :storage 6 :privilege 7 :other 8}
                  phase-key))
-      ;; 8 role slots x [in this game?, available?, gold]
+      ;; 8 role slots x [in this game?, available?, gold]. Gold ceiling 5: a
+      ;; long-ignored prospector/role can stack more than 3 doubloons.
       (reduce (fn [a r]
                 (-> a
                     (pf! (some #{r} roles))
                     (pf! (contains? available r))
-                    (pn! (get-in game-state [:role-gold r] 0) 3)))
+                    (pn! (get-in game-state [:role-gold r] 0) 5)))
               a actions/role-order)
       ;; governor / selector seats relative to the actor
       (poh! a n (seat-offset actor-idx (:governor-idx game-state) n))
       (poh! a (inc n) (or selector-offset n))
-      ;; plantation display
+      ;; plantation display. (The discard-pile size is deliberately NOT encoded:
+      ;; its magnitude says nothing actionable about what plantations remain, so
+      ;; it was pure noise for a Markov-state network.)
       (reduce (fn [a p] (pn! a (get face-freq p 0) 4)) a actions/good-order)
       (pn! a (:quarry-supply game-state) 8)
       (pn! a (count (:plantation-supply game-state)) 24)
-      (pn! a (count (:plantation-discard game-state)) 24)
-      ;; colonists and VP
+      ;; colonists and VP, each scaled by this player count's starting pool so
+      ;; that 0.0 means "the pool is empty" (a real game-ending trigger).
       (pn! a (:colonist-ship game-state) 12)
-      (pn! a (:colonist-supply game-state) 95)
-      (pn! a (:victory-point-supply game-state) 126)
+      (pn! a (:colonist-supply game-state) (state/starting-colonist-supply n))
+      (pn! a (:victory-point-supply game-state) (state/starting-victory-point-supply n))
+      ;; final-round flag: a game-ending condition (full city, colonist-ship
+      ;; shortfall, or VP supply exhausted) has already been met, so the current
+      ;; round is the last one.
+      (pf! a (state/check-victory-conditions game-state))
       ;; building supply per type
       (reduce (fn [a b] (pn! a (get-in game-state [:building-supply b] 0)
                              (get-in state/buildings [b :count] 1)))
@@ -168,16 +179,16 @@
        (encode-global! acc game-state actor-idx n)))))
 
 (defn encoded-size
-  "Input width for a game with n players (3 players: 328)"
+  "Input width for a game with n players (2 players: 249, 3 players: 327)"
   [n]
   (+ (* 67 n)          ;; per-player blocks
-     1 9 24            ;; round, decision type, role slots
+     9 24              ;; decision type, role slots
      n (inc n)         ;; governor + selector offsets
-     5 1 1 1           ;; plantation display
-     3                 ;; colonist ship/supply, VP supply
+     5 1 1             ;; plantation display (per-good, quarry, deck size)
+     3 1               ;; colonist ship/supply, VP supply, final-round flag
      23                ;; building supply
      6                 ;; trading house
-     24                ;; ships
+     (* 8 (state/num-cargo-ships n)) ;; ships (2p: 2 ships, otherwise 3)
      1 1 n             ;; captain flags
      1                 ;; hacienda flag
      5 6               ;; storage picks (kinds + single)

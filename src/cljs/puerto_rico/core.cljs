@@ -28,7 +28,7 @@
 (defonce ship-selection (reagent/atom nil)) ;; {:good :corn, :options [[idx ship remaining] ...]}
 
 ;; --------------------------------------------------------------------------
-;; Game setup: player count (3-5) and a controller per seat
+;; Game setup: player count (2-5) and a controller per seat
 ;; --------------------------------------------------------------------------
 
 (def player-names ["Alice" "Bob" "Carol" "Dave" "Erin"])
@@ -75,12 +75,28 @@
 
 (defn add-log-entry [message & [player-name stats snapshot]]
   (let [current-game (:game-state @game-state)
-        round-num (:round current-game 1)
-        current-player-idx (:current-player-idx current-game)
-        ;; Calculate turn number within round (1-based) from the acting state
-        turn-num (if current-player-idx (inc current-player-idx) 1)
+        ;; Selection ordinal within the round (1..selections-per-round). Every log
+        ;; line carries the number of the role selection that produced it, so a
+        ;; role's whole execution reads as one group. The count of roles picked so
+        ;; far this round (:role-pick-order) is the source of truth.
+        ;;
+        ;; Most entries are logged BEFORE their move is applied, so the live atom
+        ;; is the PRE-action state; a few (new game, mayor auto-fills) are logged
+        ;; AFTER and pass an explicit post-action snapshot. In a post-action state
+        ;; the acting role is already counted; pre-action, a role-SELECTION isn't
+        ;; counted yet (so bump by one) while an execution action already is.
+        post? (map? snapshot)
+        basis (if post? snapshot current-game)
+        round-num (:round basis 1)
+        picked (count (:role-pick-order basis []))
+        selecting? (and (not post?) (= (:phase current-game) :role-selection))
+        turn-num (if selecting? (inc picked) (max 1 picked))
         turn-label (str round-num "." turn-num)
+        ;; A heading begins a visual group: the "new game" line or a role
+        ;; selection. Everything else is a sub-action, rendered indented under it.
+        heading? (or (and post? (zero? picked)) selecting?)
         entry {:turn turn-label
+               :heading? heading?
                :message message
                :player player-name
                :stats stats                    ; AI search diagnostics (nil for humans)
@@ -1178,20 +1194,38 @@
         "back to current"]])]
    [:div.log-entries
     (if (seq @game-log)
-      ;; Show all entries in chronological order (oldest first)
-      (doall
-       (for [[idx entry] (map-indexed vector @game-log)]
-         ^{:key idx}
-         [:div.log-entry
-          {:class (when (= idx (:state-index @historical-view)) "selected")
-           :on-click #(view-historical-state idx)}
-          [:span.turn-number (:turn entry)]
-          (when (:player entry)
-            [:span.player (:player entry) ":"])
-          [:span.message (:message entry)]
-          (when (:stats entry)
-            (let [txt (ai-stats-text (:game-state-snapshot entry) (:stats entry))]
-              [:span.log-stats {:title txt} txt]))]))
+      ;; Show all entries in chronological order (oldest first). A role selection
+      ;; and the actions of its execution form one group (opened by a :heading?
+      ;; entry): groups alternate a subtle background so each reads as one unit,
+      ;; the heading keeps the turn number, and follow-up sub-actions are indented.
+      (let [entries @game-log
+            ;; running group index (bumps on each heading)
+            groups (:acc (reduce (fn [{:keys [acc gi]} e]
+                                   (let [gi (if (:heading? e) (inc gi) (max 0 gi))]
+                                     {:acc (conj acc gi) :gi gi}))
+                                 {:acc [] :gi -1}
+                                 entries))]
+        (doall
+         (for [[idx entry] (map-indexed vector entries)]
+           (let [gi (nth groups idx)
+                 first-in-group? (:heading? entry)]
+             ^{:key idx}
+             [:div.log-entry
+              {:class (str (when (odd? gi) "group-alt ")
+                           (when first-in-group? "group-start ")
+                           (when-not (:heading? entry) "subaction ")
+                           (when (= idx (:state-index @historical-view)) "selected"))
+               :on-click #(view-historical-state idx)}
+              ;; only the heading line of a group shows the turn number
+              (if first-in-group?
+                [:span.turn-number (:turn entry)]
+                [:span.turn-number.ghost])
+              (when (:player entry)
+                [:span.player (:player entry) ":"])
+              [:span.message (:message entry)]
+              (when (:stats entry)
+                (let [txt (ai-stats-text (:game-state-snapshot entry) (:stats entry))]
+                  [:span.log-stats {:title txt} txt]))]))))
       [:div.log-empty "No events yet..."])]])
 
 (defn game-over-main-pane [game-data]
@@ -1259,7 +1293,7 @@
       [:div.setup-row
        [:span.setup-label "Players"]
        [:div.count-toggle
-        (for [n [3 4 5]]
+        (for [n [2 3 4 5]]
           ^{:key n}
           [:button.count-btn {:class (when (= n num-players) "active")
                               :on-click #(swap! setup assoc :num-players n)}
@@ -1283,6 +1317,26 @@
       [:button.start-button.primary {:on-click start-configured-game!}
        [:span.start-button-title "Start game"]]]]))
 
+(defn role-track
+  "Header widget replacing the phase pill: one box per role placard in play.
+   The role being executed is highlighted, roles already used this round are
+   dimmed, and a badge shows the order each was picked this round."
+  [game-data]
+  (let [roles (:roles game-data)
+        used (:used-roles game-data)
+        selected (:selected-role game-data)
+        order (:role-pick-order game-data [])
+        pick-num (into {} (map-indexed (fn [i r] [r (inc i)]) order))]
+    [:div.role-track
+     (for [[i role] (map-indexed vector roles)]
+       (let [active? (= role selected)
+             done? (and (contains? used role) (not active?))
+             n (get pick-num role)]
+         ^{:key i}
+         [:div.role-box {:class (cond active? "active" done? "done" :else "open")}
+          [:span.role-box-name (role-display-name role)]
+          (when n [:span.role-box-num n])]))]))
+
 (defn game-board []
   (let [display-state (get-display-game-state)
         game-data (:game-state display-state)
@@ -1292,13 +1346,6 @@
       game-data
       (let [current-player-data (current-player game-data)
             executor (current-role-executor game-data)
-            phase-label (cond
-                          (:game-over game-data) "Game over"
-                          (= (:phase game-data) :role-selection) "Role selection"
-                          (:storage-phase game-data) "Captain · storage"
-                          (:craftsman-privilege-pending game-data) "Craftsman · privilege"
-                          (:selected-role game-data) (titlecase (role-display-name (:selected-role game-data)))
-                          :else (titlecase (:phase game-data)))
             turn-name (cond (:game-over game-data) "—"
                             (= (:phase game-data) :role-execution) (:name executor)
                             current-player-data (:name current-player-data)
@@ -1337,8 +1384,9 @@
              [:span.readout [:span.readout-num (count (:plantation-discard game-data))]
               [:span.readout-label "Discard"]]]]
            [:div.header-meta
-            [:span.meta-label "Phase"]
-            [:span.phase-pill phase-label]
+            (if (:game-over game-data)
+              [:span.phase-pill "Game over"]
+              [role-track game-data])
             [:span.meta-sep]
             [:span.meta-label "Turn"]
             [:span.meta-value turn-name]]]

@@ -159,6 +159,47 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
   border-radius: 999px;
 }
 
+/* header role track: one box per placard, ordered by canonical role order.
+   open = not yet picked this round, active = currently executing, done = used. */
+.role-track { display: flex; gap: 5px; flex-wrap: wrap; }
+.role-box {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-2);
+  background: var(--panel-2);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: capitalize;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.role-box.active {
+  background: var(--sage);
+  border-color: var(--sage-deep);
+  color: #fff;
+  box-shadow: var(--shadow);
+}
+.role-box.done { opacity: 0.4; }
+.role-box.open { color: var(--ink-soft); }
+.role-box-num {
+  margin-left: 6px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--sage-tint);
+  color: var(--sage-deep);
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.role-box.active .role-box-num { background: #fff; color: var(--sage-deep); }
+
 /* single resources row: plantations, cargo ships, trading house, goods supply */
 .header-resources {
   display: flex;
@@ -543,6 +584,16 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
 .log-entry:last-child { border-bottom: none; }
 .log-entry:hover { background: var(--sage-tint-2); }
 .log-entry.selected { background: var(--sage-tint); }
+
+/* group one role selection + its execution: alternate a faint tint, drop the
+   internal borders, and add a divider only where a new group starts */
+.log-entry.group-alt { background: rgba(107, 130, 102, 0.05); }
+.log-entry:not(.group-start) { border-top: none; }
+.log-entry.group-start { border-top: 1px solid var(--border); }
+.log-entries .log-entry:first-child { border-top: none; }
+/* follow-up sub-actions sit indented under their role heading */
+.log-entry.subaction .message { padding-left: 16px; }
+
 .turn-number {
   font-variant-numeric: tabular-nums;
   font-size: 12px; font-weight: 700;
@@ -552,6 +603,8 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
   padding: 1px 7px;
   flex: 0 0 auto;
 }
+/* placeholder keeping sub-action rows aligned under the numbered heading */
+.turn-number.ghost { background: none; min-width: 34px; padding: 1px 7px; }
 .log-entry .player { font-weight: 700; color: var(--ink); }
 .log-entry .message { color: var(--ink-soft); }
 /* faded, right-aligned AI search diagnostics */

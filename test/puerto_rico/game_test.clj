@@ -311,32 +311,32 @@
           opts (rules/valid-ship-options ships :corn 8)]
       (is (= 1 (count opts)))
       (is (= 2 (first (first opts))))))) ; ship index 2 (capacity 6)
-  (testing "valid-ship-options filters to ships that fit when some can"
+(testing "valid-ship-options filters to ships that fit when some can"
     ;; 5 corn: ship 4 can't fit, ships 5 and 6 can
-    (let [ships [{:capacity 4 :good nil :amount 0}
-                 {:capacity 5 :good nil :amount 0}
-                 {:capacity 6 :good nil :amount 0}]
-          opts (rules/valid-ship-options ships :corn 5)]
-      (is (= 2 (count opts)))
-      (is (= [1 2] (map first opts))))) ; ships 5 and 6, not 4
-  (testing "can't ship if no ship fits and nothing fits"
+  (let [ships [{:capacity 4 :good nil :amount 0}
+               {:capacity 5 :good nil :amount 0}
+               {:capacity 6 :good nil :amount 0}]
+        opts (rules/valid-ship-options ships :corn 5)]
+    (is (= 2 (count opts)))
+    (is (= [1 2] (map first opts))))) ; ships 5 and 6, not 4
+(testing "can't ship if no ship fits and nothing fits"
     ;; 4 corn, ship with 3 remaining — can't load if ship with 5 remaining exists
-    (let [ships [{:capacity 4 :good :sugar :amount 1}  ; 3 remaining
-                 {:capacity 5 :good nil :amount 0}     ; 5 remaining
-                 {:capacity 6 :good nil :amount 0}]    ; 6 remaining
-          opts (rules/valid-ship-options ships :corn 4)]
+  (let [ships [{:capacity 4 :good :sugar :amount 1}  ; 3 remaining
+               {:capacity 5 :good nil :amount 0}     ; 5 remaining
+               {:capacity 6 :good nil :amount 0}]    ; 6 remaining
+        opts (rules/valid-ship-options ships :corn 4)]
       ;; ship 4 can't fit (3 < 4), ships 5 and 6 can fit all 4
-      (is (= 2 (count opts)))
-      (is (= [1 2] (map first opts)))))
-  (testing "execute-captain with specific ship index"
-    (let [g (-> (captain-game)
-                (set-player 0 {:goods (goods {:corn 2})}))
+    (is (= 2 (count opts)))
+    (is (= [1 2] (map first opts)))))
+(testing "execute-captain with specific ship index"
+  (let [g (-> (captain-game)
+              (set-player 0 {:goods (goods {:corn 2})}))
           ;; Auto-pick should use ship 0 (capacity 4, smallest that fits)
-          g2 (rules/execute-captain g 1 :corn)
+        g2 (rules/execute-captain g 1 :corn)
           ;; Explicit ship index 2 (capacity 6) should work too
-          g3 (rules/execute-captain g 1 :corn 2)]
-      (is (= {:capacity 4 :good :corn :amount 2} (nth (:ships g2) 0)))
-      (is (= {:capacity 6 :good :corn :amount 2} (nth (:ships g3) 2))))
+        g3 (rules/execute-captain g 1 :corn 2)]
+    (is (= {:capacity 4 :good :corn :amount 2} (nth (:ships g2) 0)))
+    (is (= {:capacity 6 :good :corn :amount 2} (nth (:ships g3) 2))))
   (testing "execute-captain ignores invalid ship index, falls back to valid"
     (let [g (-> (captain-game)
                 (set-player 0 {:goods (goods {:corn 2})}))
@@ -624,6 +624,63 @@
 ;; ================================================================================
 ;; Full-game smoke test: heuristic AI vs itself must reach game over
 ;; ================================================================================
+
+(deftest two-player-setup
+  (let [g (mk-game 2)]
+    (testing "deluxe 2-player preparation"
+      (is (= [3 3] (mapv :money (:players g))) "3 doubloons each")
+      (is (= [[:indigo] [:corn]] (mapv #(mapv :type (:plantations %)) (:players g)))
+          "governor indigo, 2nd player corn")
+      (is (= [:settler :mayor :builder :craftsman :trader :captain :prospector]
+             (:roles g)) "seven placards, one prospector")
+      (is (= [4 6] (mapv :capacity (:ships g))) "only the 4- and 6-space ships")
+      (is (= 40 (:colonist-supply g)))
+      (is (= 2 (:colonist-ship g)) "two colonists on the ship")
+      (is (= 65 (:victory-point-supply g)))
+      (is (= {:corn 8 :indigo 9 :sugar 9 :tobacco 7 :coffee 7} (:goods-supply g))
+          "two of each good removed")
+      (is (= 3 (count (:face-up-plantations g))) "one more tile than players")
+      (is (= 2 (get-in g [:building-supply :small-indigo-maker])) "production: 2 each")
+      (is (= 1 (get-in g [:building-supply :small-market])) "beige: 1 each")
+      (is (= 1 (get-in g [:building-supply :factory])) "factory is beige: 1"))))
+
+(deftest two-player-governor-cycle
+  (testing "each player takes three of the seven roles before the governor passes"
+    (let [selects (atom [])]
+      (loop [g (mk-game 2) steps 0]
+        (cond
+          (>= (count @selects) 6) nil
+          (> steps 500) (is false "cycle did not reach 6 selections")
+          :else
+          (do (when (= :role-selection (:phase g))
+                (swap! selects conj [(:round g) (:current-player-idx g)]))
+              (let [actor-idx (if (= :role-execution (:phase g))
+                                (:role-execution-current-idx g)
+                                (:current-player-idx g))
+                    actor-id (:id (nth (:players g) actor-idx))
+                    move (ai/ai-select-move g actor-id)]
+                (recur (rules/apply-move g move) (inc steps))))))
+      ;; six selections, all in round 1, alternating seat 0/1 starting with governor
+      (is (= [[1 0] [1 1] [1 0] [1 1] [1 0] [1 1]] @selects)))))
+
+(deftest full-game-smoke-test-2p
+  (let [result
+        (with-out-str
+          (loop [g (mk-game 2) steps 0]
+            (cond
+              (:game-over g) (println "DONE")
+              (> steps 5000) (println "STALLED")
+              :else
+              (let [actor-idx (if (= :role-execution (:phase g))
+                                (:role-execution-current-idx g)
+                                (:current-player-idx g))
+                    actor-id (:id (nth (:players g) actor-idx))
+                    move (ai/ai-select-move g actor-id)]
+                (if (nil? move)
+                  (println "NO-MOVE at" (:phase g))
+                  (recur (rules/apply-move g move) (inc steps)))))))]
+    (is (.contains ^String result "DONE")
+        (str "2-player game did not finish: " result))))
 
 (deftest full-game-smoke-test
   (dotimes [_ 3]

@@ -825,8 +825,11 @@
                                (update-in [:players selector-idx :money] + gold-on-role)
                                (assoc-in [:role-gold role] 0))
                            game-state)
-          ;; Increment the counter of players who have selected this round
-          game-with-counter (update game-with-gold :players-selected-this-round inc)
+          ;; Increment the counter of players who have selected this round and
+          ;; record the pick order (drives the header role track)
+          game-with-counter (-> game-with-gold
+                                (update :players-selected-this-round inc)
+                                (update :role-pick-order (fnil conj []) role))
           ;; All roles now use the same execution flow
           execution-order (state/create-role-execution-order game-state selector-idx)]
       (-> game-with-counter
@@ -979,6 +982,7 @@
         (assoc :governor-idx new-governor)
         (assoc :current-player-idx new-governor)
         (assoc :players-selected-this-round 0)
+        (assoc :role-pick-order [])
         (assoc :phase :role-selection))))
 
 (defn- end-game [game-state]
@@ -1022,7 +1026,7 @@
                           base-game)
         players-selected (:players-selected-this-round game-after-role)
         num-players (count (:players game-after-role))]
-    (if (>= players-selected num-players)
+    (if (>= players-selected (state/selections-per-round num-players))
       ;; Round complete - the game ends at the end of the round a trigger occurred in
       (if (state/check-victory-conditions game-after-role)
         (end-game game-after-role)

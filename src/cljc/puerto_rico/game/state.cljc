@@ -61,13 +61,37 @@
 (def roles [:settler :mayor :builder :craftsman :trader :captain :prospector])
 
 (defn roles-for-player-count
-  "Role placards in play: 3 players use no prospector, 4 players one, 5 players two."
+  "Role placards in play: 2 players use seven placards (one prospector), 3 players
+   use no prospector, 4 players one, 5 players two."
   [num-players]
   (case num-players
+    2 [:settler :mayor :builder :craftsman :trader :captain :prospector]
     3 [:settler :mayor :builder :craftsman :trader :captain]
     4 [:settler :mayor :builder :craftsman :trader :captain :prospector]
     5 [:settler :mayor :builder :craftsman :trader :captain :prospector :prospector-2]
     [:settler :mayor :builder :craftsman :trader :captain :prospector]))
+
+(defn selections-per-round
+  "Role selections in one governor cycle before roles reset and the governor
+   passes. The 2-player deluxe variant runs a longer cycle: the players alternate
+   picking until each has taken three (six total of the seven placards), one
+   placard left for a doubloon. Every other count picks exactly one role per
+   player per round."
+  [num-players]
+  (if (= num-players 2) 6 num-players))
+
+(defn starting-colonist-supply
+  "Colonist supply (not counting the colonists that start on the ship)."
+  [num-players]
+  (case num-players 2 40, 3 55, 4 75, 5 95, 95))
+
+(defn starting-victory-point-supply [num-players]
+  (case num-players 2 65, 3 75, 4 100, 5 126, 126))
+
+(defn num-cargo-ships
+  "Cargo ships in play: the 2-player variant uses only the 4- and 6-space ships."
+  [num-players]
+  (if (= num-players 2) 2 3))
 
 (def plantation-tiles
   {:corn 10 :indigo 12 :sugar 11 :tobacco 9 :coffee 8 :quarry 8})
@@ -79,6 +103,18 @@
             (assoc supply building-key (:count building-info)))
           {}
           buildings))
+
+(def production-building-keys
+  "The six good-producing buildings. (The factory is :production-typed in the
+   building def but counts as a beige building, so it is excluded here.)"
+  #{:small-indigo-maker :small-sugar-maker :large-indigo-maker
+    :large-sugar-maker :tobacco-maker :coffee-maker})
+
+(defn create-building-supply-2p
+  "2-player supply: one of each beige building, two of each of the six
+   production buildings."
+  []
+  (into {} (map (fn [k] [k (if (production-building-keys k) 2 1)]) (keys buildings))))
 
 (defn create-role-execution-order
   "Create the order in which players execute a role, starting with the role selector"
@@ -109,14 +145,15 @@
 (defn new-game-state
   [players]
   (let [num-players (count players)
-        ;; Starting money equals doubloons per rulebook: 3P=2, 4P=3, 5P=4
-        starting-money (case num-players 3 2, 4 3, 5 4, 2)
+        ;; Starting money equals doubloons per rulebook: 2P=3, 3P=2, 4P=3, 5P=4
+        starting-money (case num-players 2 3, 3 2, 4 3, 5 4, 2)
         ;; Set up initial plantations according to rules
         players-with-plantations
         (vec (map-indexed
               (fn [idx player]
                 (let [plantation (cond
                                    (= idx 0) :indigo ;; Governor gets indigo
+                                   (and (= num-players 2) (= idx 1)) :corn
                                    (and (= num-players 3) (= idx 1)) :indigo
                                    (and (= num-players 3) (= idx 2)) :corn
                                    (and (= num-players 4) (= idx 1)) :indigo
@@ -135,6 +172,7 @@
         initial-plantations (map (fn [idx]
                                    (cond
                                      (= idx 0) :indigo
+                                     (and (= num-players 2) (= idx 1)) :corn
                                      (and (= num-players 3) (= idx 1)) :indigo
                                      (and (= num-players 3) (= idx 2)) :corn
                                      (and (= num-players 4) (= idx 1)) :indigo
@@ -145,7 +183,12 @@
                                      :else nil))
                                  (range num-players))
         plantation-reductions (frequencies (remove nil? initial-plantations))
-        remaining-plantations (merge-with - plantation-tiles plantation-reductions)
+        ;; 2-player variant: remove three of each plantation tile (incl. quarry)
+        ;; from the supply before dealing.
+        base-tiles (if (= num-players 2)
+                     (into {} (map (fn [[k v]] [k (- v 3)]) plantation-tiles))
+                     plantation-tiles)
+        remaining-plantations (merge-with - base-tiles plantation-reductions)
         ;; Separate quarries from regular plantations  
         regular-plantation-types [:corn :indigo :sugar :tobacco :coffee]
         quarry-count (:quarry remaining-plantations)
@@ -174,25 +217,26 @@
      :role-gold (into {} (map #(vector % 0) game-roles))
      ;; Track how many players have selected roles this round
      :players-selected-this-round 0
+     ;; Roles picked this round, in selection order (for the header role track)
+     :role-pick-order []
      :plantation-supply remaining-deck
      :plantation-discard []
      :face-up-plantations face-up-plantations
      :quarry-supply quarry-count
-     :goods-supply {:corn 10 :indigo 11 :sugar 11 :tobacco 9 :coffee 9}
-     :colonist-supply (case num-players
-                        3 55
-                        4 75
-                        5 95
-                        95) ; default to full supply
+     ;; 2-player variant removes two tokens of each good from the supply.
+     :goods-supply (if (= num-players 2)
+                     {:corn 8 :indigo 9 :sugar 9 :tobacco 7 :coffee 7}
+                     {:corn 10 :indigo 11 :sugar 11 :tobacco 9 :coffee 9})
+     :colonist-supply (starting-colonist-supply num-players)
      ;; Colonist ship for Mayor role (starts with number of players)
      :colonist-ship (count players-with-plantations)
-     :building-supply (create-building-supply buildings)
-     :victory-point-supply (case num-players
-                             3 75
-                             4 100
-                             5 126
-                             126) ; default to full supply
+     :building-supply (if (= num-players 2)
+                        (create-building-supply-2p)
+                        (create-building-supply buildings))
+     :victory-point-supply (starting-victory-point-supply num-players)
      :ships (case num-players
+              2 [{:capacity 4 :good nil :amount 0}
+                 {:capacity 6 :good nil :amount 0}]
               3 [{:capacity 4 :good nil :amount 0}
                  {:capacity 5 :good nil :amount 0}
                  {:capacity 6 :good nil :amount 0}]
@@ -324,8 +368,8 @@
           (case t
             ;; If it's a production building, do nothing
             (:small-indigo-maker :small-sugar-maker
-             :large-indigo-maker :large-sugar-maker
-             :tobacco-maker :coffee-maker)
+                                 :large-indigo-maker :large-sugar-maker
+                                 :tobacco-maker :coffee-maker)
             (recur (inc i) violet)
 
             ;; Else, it's a violet building

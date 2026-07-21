@@ -131,7 +131,8 @@
         g-p2 (assoc g :current-player-idx 1)
         v (encoder/encode-state g-p2)]
     ;; seat 0 of the encoding is the actor: money is the first feature
-    (is (= (/ 17.0 20.0) (first v)))))
+    ;; (money ceiling is 40)
+    (is (= (/ 17.0 40.0) (first v)))))
 
 ;; --------------------------------------------------------------------------
 ;; MCTS
