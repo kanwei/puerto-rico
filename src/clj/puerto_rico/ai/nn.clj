@@ -8,11 +8,22 @@
      (mcts/mcts-search game-state {:evaluate (evaluator model)})"
   (:require [puerto-rico.ai.actions :as actions]
             [puerto-rico.ai.encoder :as encoder])
-  (:import (ai.onnxruntime OnnxTensor OrtEnvironment OrtSession$Result TensorInfo)))
+  (:import (ai.onnxruntime OnnxTensor OrtEnvironment OrtSession$Result
+                           OrtSession$SessionOptions TensorInfo)))
 
 (defn load-model [onnx-path]
   (let [env (OrtEnvironment/getEnvironment)
-        session (.createSession env ^String onnx-path)
+        ;; SINGLE-THREADED inference on purpose. These nets are tiny, so ORT's
+        ;; default intra-op thread pool costs more in coordination than it saves
+        ;; (measured: batch-1 latency 215µs at 1 thread vs 498µs at 14). More
+        ;; importantly, self-play parallelizes across GAMES (par-map over all
+        ;; cores); a multi-threaded session would then oversubscribe cores^2 and
+        ;; tank throughput (measured: ~2.2x more evals/s at intra-op=1 across 14
+        ;; workers). Keep parallelism at the game level, inference single-threaded.
+        opts (doto (OrtSession$SessionOptions.)
+               (.setIntraOpNumThreads 1)
+               (.setInterOpNumThreads 1))
+        session (.createSession env ^String onnx-path opts)
         ;; the "state" input's fixed feature dimension (last axis; axis 0 is batch)
         info ^TensorInfo (.getInfo (val (first (.getInputInfo session))))
         shape (.getShape info)

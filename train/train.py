@@ -372,14 +372,14 @@ def main():
                args.out + ".pt")
 
     net.eval().to("cpu")
+    # Inference is one state at a time (MCTS leaf eval), so a batch-1 dummy is
+    # fine. opset 18 is what the current exporter targets natively (17 triggers a
+    # lossy automatic downconvert).
     dummy = torch.zeros(1, in_dim)
-    # opset 17 covers the transformer's attention/LayerNorm ops; the MLP is
-    # fine on it too. Input/output names are identical across architectures, so
-    # the Clojure ONNX bridge (nn.clj) is architecture-agnostic.
     torch.onnx.export(net, dummy, args.out + ".onnx",
                       input_names=["state"],
                       output_names=["policy_logits", "value_logits", "score_margins"],
-                      opset_version=17,
+                      opset_version=18,
                       dynamic_axes={"state": {0: "batch"},
                                     "policy_logits": {0: "batch"},
                                     "value_logits": {0: "batch"},

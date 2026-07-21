@@ -48,6 +48,10 @@
 
 (def ^:private model-cache (atom {}))
 
+(defn- cached-model [spec]
+  (or (get @model-cache spec)
+      (get (swap! model-cache assoc spec (nn/load-model spec)) spec)))
+
 (defn- weighted-choice
   "Pick a key from a {key weight} map with probability proportional to weight,
    using the per-thread RNG."
@@ -96,9 +100,7 @@
                     mcts/random-playout-policy)]
        (mcts/blend-heuristic-priors
         (mcts/rollout-evaluator :playout-policy policy) {}))
-     (nn/evaluator (or (get @model-cache spec)
-                       (get (swap! model-cache assoc spec (nn/load-model spec)) spec))
-                   (when utility-c {:utility-c utility-c})))))
+     (nn/evaluator (cached-model spec) (when utility-c {:utility-c utility-c})))))
 
 (defn- dense-policy [visits]
   (let [total (double (max 1 (reduce + (vals visits))))]
@@ -169,6 +171,9 @@
 ;; --------------------------------------------------------------------------
 
 (def n-cores (.availableProcessors (Runtime/getRuntime)))
+;; Leave 2 cores headroom: GC and the JVM itself need room, and pinning every
+;; core to a game thread just adds contention.
+(def default-threads (max 1 (- n-cores 2)))
 
 (defn- par-map
   "Like pmap but with a bounded pool of `threads` workers (CPU-bound work).
@@ -217,7 +222,7 @@
    guided by that ONNX network; otherwise it uses playout MCTS (generation 0),
    with :rollout selecting the playout policy (:random or :heuristic)."
   [{:keys [games out threads model utility-c rollout]
-    :or {threads n-cores out "data/selfplay.bin" rollout "random"} :as opts}]
+    :or {threads default-threads out "data/selfplay.bin" rollout "random"} :as opts}]
   (let [rollout-kw (keyword rollout)
         opts (assoc opts :evaluate (evaluator-for model {:utility-c utility-c :rollout rollout-kw}))
         _ (println (format "Self-play with %s%s"
@@ -276,7 +281,7 @@
    1/players baseline). champion nil/'rollout' pits the challenger vs rollouts.
    Prints a machine-readable RESULT line for the training loop."
   [{:keys [challenger champion games players simulations threads utility-c rollout]
-    :or {games 30 players 3 simulations 100 threads n-cores rollout "random"}}]
+    :or {games 30 players 3 simulations 100 threads default-threads rollout "random"}}]
   (println (format "Versus: challenger=%s  champion=%s  (%d games, %d sims, %d threads%s)"
                    challenger (or champion (str (name (keyword rollout)) "-rollout"))
                    games simulations threads
@@ -336,7 +341,7 @@
   "Play games in parallel with the MCTS seat rotating; report the win rate.
    With 3 players, a bot no better than its opponents wins ~33%."
   [{:keys [games players threads model utility-c rollout]
-    :or {games 20 players 3 threads n-cores rollout "random"} :as opts}]
+    :or {games 20 players 3 threads default-threads rollout "random"} :as opts}]
   (println (format "Running %d arena games on %d threads (MCTS=%s)..."
                    games threads (if model (str "model " model) (str (name (keyword rollout)) " rollouts"))))
   (let [opts (assoc opts :evaluate
@@ -375,8 +380,8 @@
       "arena"    (arena (merge {:games 20 :simulations 100} opts))
       "versus"   (versus (merge {:games 100 :simulations 400} opts))
       (println (str "usage (--utility-c C weights the score-margin head in NN search;\n"
-                    "       --rollout heuristic|random picks the gen-0 playout policy):\n"
+                    "       --rollout heuristic|random picks the gen-0 playout policy; --threads N game threads):\n"
                     "  clj -M:selfplay generate --games N --sims N [--model M.onnx] [--utility-c C] [--rollout K] [--threads N] --out FILE\n"
                     "  clj -M:selfplay arena    --games N --sims N [--model M.onnx] [--utility-c C] [--rollout K] [--threads N]   (MCTS vs heuristic)\n"
-                    "  clj -M:selfplay versus   --challenger A.onnx [--champion B.onnx] [--utility-c C] [--rollout K] --games N --sims N"))))
+                    "  clj -M:selfplay versus   --challenger A.onnx [--champion B.onnx] [--utility-c C] --games N --sims N"))))
   (shutdown-agents))
