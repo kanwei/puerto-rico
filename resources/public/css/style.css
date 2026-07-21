@@ -407,6 +407,8 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; margin: 0; letter-
 .choice-card h3 { font-size: 16px; text-transform: capitalize; margin-bottom: 4px; }
 .choice-card p { font-size: 12.5px; color: var(--muted); margin: 0; }
 .choice-card.skip { background: transparent; border-style: dashed; }
+.choice-card.cancel { background: transparent; border-style: dashed; }
+.choice-card .ship-info { font-size: 11px; color: var(--sage-deep); font-weight: 600; margin-top: 2px; }
 .privilege-text { color: var(--sage-deep) !important; font-size: 11.5px !important; }
 
 /* builder tableau — four cost-tier columns like the game board */

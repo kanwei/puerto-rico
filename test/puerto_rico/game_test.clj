@@ -293,7 +293,56 @@
           g2 (rules/execute-captain g 1 :corn)   ;; 2 + harbor 1 + privilege 1
           g3 (rules/execute-captain g2 1 :indigo)] ;; 3 + harbor 1
       (is (= 4 (get-in g2 [:players 0 :victory-points])))
-      (is (= 8 (get-in g3 [:players 0 :victory-points]))))))
+      (is (= 8 (get-in g3 [:players 0 :victory-points])))))
+  (testing "valid-ship-options returns all ships that can fit everything"
+    ;; 2 corn, ships 4/5/6 all empty — all three can fit 2
+    (let [ships [{:capacity 4 :good nil :amount 0}
+                 {:capacity 5 :good nil :amount 0}
+                 {:capacity 6 :good nil :amount 0}]
+          opts (rules/valid-ship-options ships :corn 2)]
+      (is (= 3 (count opts)))
+      ;; sorted by capacity ascending
+      (is (= [0 1 2] (map first opts)))))
+  (testing "valid-ship-options only returns biggest ships when nothing fits everything"
+    ;; 8 corn, ships 4/5/6 — nothing fits 8, biggest (6) loads the most
+    (let [ships [{:capacity 4 :good nil :amount 0}
+                 {:capacity 5 :good nil :amount 0}
+                 {:capacity 6 :good nil :amount 0}]
+          opts (rules/valid-ship-options ships :corn 8)]
+      (is (= 1 (count opts)))
+      (is (= 2 (first (first opts))))))) ; ship index 2 (capacity 6)
+  (testing "valid-ship-options filters to ships that fit when some can"
+    ;; 5 corn: ship 4 can't fit, ships 5 and 6 can
+    (let [ships [{:capacity 4 :good nil :amount 0}
+                 {:capacity 5 :good nil :amount 0}
+                 {:capacity 6 :good nil :amount 0}]
+          opts (rules/valid-ship-options ships :corn 5)]
+      (is (= 2 (count opts)))
+      (is (= [1 2] (map first opts))))) ; ships 5 and 6, not 4
+  (testing "can't ship if no ship fits and nothing fits"
+    ;; 4 corn, ship with 3 remaining — can't load if ship with 5 remaining exists
+    (let [ships [{:capacity 4 :good :sugar :amount 1}  ; 3 remaining
+                 {:capacity 5 :good nil :amount 0}     ; 5 remaining
+                 {:capacity 6 :good nil :amount 0}]    ; 6 remaining
+          opts (rules/valid-ship-options ships :corn 4)]
+      ;; ship 4 can't fit (3 < 4), ships 5 and 6 can fit all 4
+      (is (= 2 (count opts)))
+      (is (= [1 2] (map first opts)))))
+  (testing "execute-captain with specific ship index"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 2})}))
+          ;; Auto-pick should use ship 0 (capacity 4, smallest that fits)
+          g2 (rules/execute-captain g 1 :corn)
+          ;; Explicit ship index 2 (capacity 6) should work too
+          g3 (rules/execute-captain g 1 :corn 2)]
+      (is (= {:capacity 4 :good :corn :amount 2} (nth (:ships g2) 0)))
+      (is (= {:capacity 6 :good :corn :amount 2} (nth (:ships g3) 2))))
+  (testing "execute-captain ignores invalid ship index, falls back to valid"
+    (let [g (-> (captain-game)
+                (set-player 0 {:goods (goods {:corn 2})}))
+          ;; Ship 2 is valid but so is 0 and 1. Specifying ship 0 explicitly.
+          g2 (rules/execute-captain g 1 :corn 0)]
+      (is (= {:capacity 4 :good :corn :amount 2} (nth (:ships g2) 0))))))
 
 (deftest captain-wharf
   (testing "wharf ships all goods of one kind to the supply, once per phase"

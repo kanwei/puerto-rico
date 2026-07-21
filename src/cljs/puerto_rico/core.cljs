@@ -25,6 +25,7 @@
 
 ;; Game log state
 (defonce game-log (reagent/atom []))
+(defonce ship-selection (reagent/atom nil)) ;; {:good :corn, :options [[idx ship remaining] ...]}
 
 ;; --------------------------------------------------------------------------
 ;; Game setup: player count (3-5) and a controller per seat
@@ -252,6 +253,31 @@
             (swap! game-state assoc :game-state new-game-state)
             (js/console.log "Building chosen:" building-key "for player:" (:name executor-player) "New game state:" new-game-state)))))))
 
+(defn- execute-captain-load
+  "Execute captain loading with optional specific ship index."
+  [current-game player-id good-type & [ship-idx]]
+  (let [executor-idx (:role-execution-current-idx current-game)
+        game-after-role (if ship-idx
+                          (rules/execute-role current-game :captain player-id good-type ship-idx)
+                          (rules/execute-role current-game :captain player-id good-type))
+        new-game-state (rules/advance-role-execution
+                        (if (identical? game-after-role current-game)
+                          (rules/pass-captain-turn game-after-role)
+                          game-after-role))
+        executor-after (nth (:players new-game-state) executor-idx)
+        executor-before (nth (:players current-game) executor-idx)
+        goods-before (get-in executor-before [:goods good-type] 0)
+        goods-after (get-in executor-after [:goods good-type] 0)
+        vp-before (:victory-points executor-before)
+        vp-after (:victory-points executor-after)
+        goods-shipped (- goods-before goods-after)
+        vp-gained (- vp-after vp-before)]
+    (when-not (:is-ai executor-before)
+      (add-log-entry (str "Shipped " goods-shipped " " (name good-type)
+                          " for " vp-gained " VP")
+                     (:name executor-before)))
+    new-game-state))
+
 (defn handle-good-choice [good-type role]
   (let [current-game (:game-state @game-state)]
     (when current-game
@@ -259,43 +285,43 @@
             player-id (:id executor-player)
             executor-idx (:role-execution-current-idx current-game)]
         (when (and executor-player player-id)
-          (let [;; Capture state before action
-                money-before (:money executor-player)
-                vp-before (:victory-points executor-player)
-                goods-before (get-in executor-player [:goods good-type] 0)
+          (if (= role :captain)
+            ;; Captain: check for multiple ship options
+            (let [amount (get-in executor-player [:goods good-type] 0)
+                  options (rules/valid-ship-options (:ships current-game) good-type amount)]
+              (if (and (seq options) (> (count options) 1))
+                ;; Multiple ships: show selection UI
+                (reset! ship-selection {:good good-type
+                                        :player-id player-id
+                                        :options options})
+                ;; Single ship or none: execute directly
+                (let [new-game (execute-captain-load current-game player-id good-type)]
+                  (swap! game-state assoc :game-state new-game))))
+            ;; Non-captain: execute directly
+            (let [money-before (:money executor-player)
+                  vp-before (:victory-points executor-player)
+                  goods-before (get-in executor-player [:goods good-type] 0)
 
-                ;; Execute role. A captain turn that loaded nothing counts as
-                ;; a pass so the looping captain phase always terminates.
-                game-after-role (rules/execute-role current-game role player-id good-type)
-                new-game-state (rules/advance-role-execution
-                                (if (and (= role :captain)
-                                         (identical? game-after-role current-game))
-                                  (rules/pass-captain-turn game-after-role)
-                                  game-after-role))
+                  game-after-role (rules/execute-role current-game role player-id good-type)
+                  new-game-state (rules/advance-role-execution game-after-role)
 
-                ;; Get updated player state
-                executor-after (nth (:players new-game-state) executor-idx)
-                money-after (:money executor-after)
-                vp-after (:victory-points executor-after)
-                goods-after (get-in executor-after [:goods good-type] 0)
+                  executor-after (nth (:players new-game-state) executor-idx)
+                  money-after (:money executor-after)
+                  vp-after (:victory-points executor-after)
+                  goods-after (get-in executor-after [:goods good-type] 0)
 
-                ;; Calculate changes
-                money-gained (- money-after money-before)
-                vp-gained (- vp-after vp-before)
-                goods-shipped (- goods-before goods-after)]
+                  money-gained (- money-after money-before)
+                  vp-gained (- vp-after vp-before)
+                  goods-shipped (- goods-before goods-after)]
 
-            ;; Only log for human players (AI logs with details)
-            (when-not (:is-ai executor-player)
-              (let [action-text (case role
-                                  :trader (str "Sold " (name good-type)
-                                               " for " money-gained " doubloons")
-                                  :captain (str "Shipped " goods-shipped " " (name good-type)
-                                                " for " vp-gained " VP")
-                                  (str "Used " (name good-type)))]
-                (add-log-entry action-text (:name executor-player))))
+              (when-not (:is-ai executor-player)
+                (let [action-text (case role
+                                    :trader (str "Sold " (name good-type)
+                                                 " for " money-gained " doubloons")
+                                    (str "Used " (name good-type)))]
+                  (add-log-entry action-text (:name executor-player))))
 
-            (swap! game-state assoc :game-state new-game-state)
-            (js/console.log "Good chosen:" good-type "for role:" role "for player:" (:name executor-player) "New game state:" new-game-state)))))))
+              (swap! game-state assoc :game-state new-game-state))))))))
 
 (defn handle-wharf-choice
   "Captain phase: ship ALL goods of one kind to the supply via the wharf"
@@ -845,10 +871,16 @@
                  "Select a good from your inventory:")]
            [:div.choice-grid
             (for [good-type available-goods]
-              ^{:key good-type}
-              [:div.choice-card {:on-click #(handle-good-choice good-type role)}
-               [:h3 (name good-type)]
-               [:p "You have: " (get-in current-player-data [:goods good-type] 0)]])]])
+              (let [amount (get-in current-player-data [:goods good-type] 0)
+                    ship-info (when (= role :captain)
+                                (let [options (rules/valid-ship-options (:ships game-data) good-type amount)]
+                                  (when (> (count options) 1)
+                                    "Choose Ship")))]
+                ^{:key good-type}
+                [:div.choice-card {:on-click #(handle-good-choice good-type role)}
+                 [:h3 (name good-type)]
+                 [:p "You have: " amount]
+                 (when ship-info [:p.ship-info ship-info])]))]])
         (when (seq wharf-goods)
           [:div
            [:p "⚓ Or use your wharf to ship ALL goods of one kind to the supply:"]
@@ -871,6 +903,33 @@
          [:div.choice-card.skip {:on-click #(handle-skip-role role)}
           [:h3 "Skip"]
           [:p "No goods available"]]]])]))
+
+(defn ship-selection-ui
+  "UI for choosing which ship to load goods onto when multiple valid options exist."
+  [{:keys [good player-id options]}]
+  (let [game-data (:game-state @game-state)
+        player-goods (get-in game-data [:players (dec player-id) :goods good] 0)]
+    [:div.role-execution
+     [:h2 "🚢 Choose a Cargo Ship"]
+     [:p "You must load on a ship that fits the most " (name good)
+         " — these ships all load the same amount:"]
+     [:div.choice-grid
+      (for [[idx ship remaining] options]
+        (let [loadable (min remaining player-goods)
+              cap (:capacity ship)]
+          ^{:key idx}
+          [:div.choice-card
+           {:on-click (fn []
+                        (let [new-game (execute-captain-load game-data player-id good idx)]
+                          (swap! game-state assoc :game-state new-game)
+                          (reset! ship-selection nil)))}
+           [:h3 (str cap " Capacity Ship")]
+           [:p "Load " loadable " " (name good) " for " loadable " VP"]]))]
+     [:div.choice-grid
+      [:div.choice-card.cancel
+       {:on-click #(reset! ship-selection nil)}
+       [:h3 "← Back"]
+       [:p "Choose a different good"]]]]))
 
 (defn mayor-tile
   "One board tile in the mayor screen: a colored dot, the name, and a clickable
@@ -969,7 +1028,9 @@
       :mayor [mayor-placement-ui game-data]
       :captain (if (:storage-phase game-data)
                  [storage-choice-ui game-data]
-                 [good-choice-ui game-data :captain])
+                 (if-let [sel @ship-selection]
+                   [ship-selection-ui sel]
+                   [good-choice-ui game-data :captain]))
       :craftsman
       (if-let [candidates (:craftsman-privilege-pending game-data)]
         ;; selector picks which produced kind to take as the privilege

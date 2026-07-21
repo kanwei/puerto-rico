@@ -610,44 +610,67 @@
          (update :victory-point-supply - vps-to-award))
      vps-to-award]))
 
-(defn find-ship-for-good [ships good amount]
-  "Find the ship this good must be loaded on, per Puerto Rico rules:
-   1. If a ship already carries this good, it MUST be used. If that ship is
-      full, this good cannot be shipped at all (returns nil).
-   2. Otherwise an empty ship is used: the smallest that fits everything, or
-      if none fits everything, the one that loads the most (partial load).
-   Returns [idx ship] or nil."
+(defn valid-ship-options
+  "Return all valid ship options for loading `good` of `amount`, per Puerto Rico rules:
+   1. If a ship already carries this good, it MUST be used (only option).
+      If full, returns nil.
+   2. Among empty ships: must pick one that loads the MOST goods.
+      - If some ships can fit everything, all such ships are valid options.
+      - If no ship fits everything, only ships that load the most (biggest) are valid.
+   Returns a vector of [idx ship loadable-amount] sorted by capacity ascending,
+   or nil if no ship can be used."
+  [ships good amount]
   (loop [i 0
-         best-empty-idx nil
-         best-empty-cap 1000
-         best-partial-idx nil
-         best-partial-cap -1]
+         same-good nil
+         empty-ships []]
     (if (< i (count ships))
       (let [ship (nth ships i)
             s-good (:good ship)
-            s-cap (:capacity ship)]
-        (if (= s-good good)
-          ;; Rule 1: must use same-good ship. If full, return nil immediately.
-          (if (< (:amount ship) s-cap)
-            [i ship]
-            nil)
-          (if (nil? s-good)
-            ;; Track empty ships
-            (let [fits-all (>= s-cap amount)
-                  new-empty (if (and fits-all (< s-cap best-empty-cap))
-                              [i s-cap]
-                              [best-empty-idx best-empty-cap])
-                  new-partial (if (> s-cap best-partial-cap)
-                                [i s-cap]
-                                [best-partial-idx best-partial-cap])]
-              (recur (inc i) (first new-empty) (second new-empty)
-                     (first new-partial) (second new-partial)))
-            (recur (inc i) best-empty-idx best-empty-cap best-partial-idx best-partial-cap))))
-      ;; Loop finished, no exact match found
+            s-cap (:capacity ship)
+            remaining (- s-cap (:amount ship))]
+        (cond
+          ;; Ship already carries this good
+          (= s-good good)
+          (recur (inc i)
+                 (if (nil? same-good) [i ship remaining] same-good)
+                 empty-ships)
+
+          ;; Empty ship
+          (nil? s-good)
+          (recur (inc i) same-good
+                 (conj empty-ships [i ship remaining]))
+
+          :else
+          (recur (inc i) same-good empty-ships)))
+      ;; Done scanning
       (cond
-        best-empty-idx [best-empty-idx (nth ships best-empty-idx)]
-        best-partial-idx [best-partial-idx (nth ships best-partial-idx)]
-        :else nil))))
+        ;; Rule 1: must use same-good ship (if it has space)
+        same-good
+        (if (pos? (nth same-good 2))
+          [(vector (first same-good) (second same-good) (nth same-good 2))]
+          ;; Full ship carrying this good — cannot ship
+          nil)
+
+        ;; Rule 2: among empty ships, find max loadable
+        (seq empty-ships)
+        (let [max-load (apply max (map #(nth % 2) empty-ships))
+              ;; If some ships can fit everything (loadable >= amount), only those count
+              can-fit-all (some #(>= (nth % 2) amount) empty-ships)
+              best (if can-fit-all
+                     (filter #(>= (nth % 2) amount) empty-ships)
+                     (filter #(= (nth % 2) max-load) empty-ships))]
+          ;; Sort by capacity ascending (smallest first)
+          (sort-by (comp :capacity second) best))
+
+        :else
+        nil))))
+
+(defn find-ship-for-good [ships good amount]
+  "Find the ship this good must be loaded on, per Puerto Rico rules.
+   Returns [idx ship] or nil. Picks the smallest valid ship (for backward compat)."
+  (when-let [options (valid-ship-options ships good amount)]
+    (let [[idx ship _] (first options)]
+      [idx ship])))
 
 (defn return-full-ships-to-supply [game-state]
   "Check all ships and return goods from full ships to supply, then reset those ships"
@@ -671,7 +694,7 @@
         ships (:ships game-state)]
     (some (fn [[good-type amount]]
             (and (pos? amount)
-                 (find-ship-for-good ships good-type amount)))
+                 (valid-ship-options ships good-type amount)))
           goods)))
 
 (defn can-use-wharf?
@@ -737,9 +760,16 @@
 
 (defn execute-captain
   "Execute one captain-phase loading turn. With wharf? truthy, the player ships
-   ALL goods of the chosen kind to the supply via their wharf instead of a ship."
-  [game-state player-id good-choice & [wharf?]]
-  (let [player-idx (state/player-index game-state player-id)
+   ALL goods of the chosen kind to the supply via their wharf instead of a ship.
+   Optional ship-idx can specify which ship to load onto (when multiple valid options exist).
+   Calling: (execute-captain gs player-id good)          ; auto-pick ship
+            (execute-captain gs player-id good ship-idx) ; pick specific ship
+            (execute-captain gs player-id good :wharf)   ; use wharf"
+  [game-state player-id good-choice & [ship-idx-or-wharf]]
+  (let [wharf? (= ship-idx-or-wharf :wharf)
+        ship-idx (when (and (not wharf?) (number? ship-idx-or-wharf))
+                   ship-idx-or-wharf)
+        player-idx (state/player-index game-state player-id)
         player (when player-idx (get-in game-state [:players player-idx]))
         amount-to-ship (get-in player [:goods good-choice] 0)]
     (cond
@@ -759,14 +789,22 @@
 
       ;; Normal load onto a cargo ship
       :else
-      (if-let [[ship-idx ship] (find-ship-for-good (:ships game-state) good-choice amount-to-ship)]
-        (let [actual-amount (min amount-to-ship (- (:capacity ship) (:amount ship)))]
+      (if-let [options (valid-ship-options (:ships game-state) good-choice amount-to-ship)]
+        (let [[target-idx ship ship-remaining]
+              (if ship-idx
+                ;; Use the specified ship if it's in the valid options
+                (or (first (filter #(= (first %) ship-idx) options))
+                    ;; Fallback to first valid option if specified ship is invalid
+                    (first options))
+                ;; Auto-pick smallest valid ship
+                (first options))
+              actual-amount (min amount-to-ship ship-remaining)]
           (if (pos? actual-amount)
             (-> (first (award-victory-points game-state player-idx actual-amount))
                 (award-loading-bonuses player-idx)
                 (update-in [:players player-idx :goods good-choice] - actual-amount)
-                (assoc-in [:ships ship-idx :good] good-choice)
-                (update-in [:ships ship-idx :amount] + actual-amount)
+                (assoc-in [:ships target-idx :good] good-choice)
+                (update-in [:ships target-idx :amount] + actual-amount)
                 (assoc :captain-passes 0))
             game-state))
         game-state))))
